@@ -1,0 +1,9 @@
+OutputDir: train_float_cnn
+KerasModel: float_cnn
+Filters: 16,32
+Kernel: 2,2
+Strides: 1,1
+Activation: relu
+KerasLoss: categorical_crossentropy
+L1Reg: 0
+Epochs: 50
