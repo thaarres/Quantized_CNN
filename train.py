@@ -1,8 +1,6 @@
-"""This is the summary line
-
-This code is loosely based on the example
-from J. Brownlee at
- https://machinelearningmastery.com/how-to-develop-a-convolutional-neural-network-from-scratch-for-mnist-handwritten-digit-classification/
+"""2D Conv
+This code is loosely based on an example
+from J. Brownlee at https://machinelearningmastery.com/
 """
 
 from __future__ import print_function
@@ -14,7 +12,6 @@ from optparse import OptionParser
 print("Importing TensorFlow")
 import tensorflow
 from tensorflow.keras.datasets import mnist, fashion_mnist
-from tensorflow.keras.models import Sequential
 from tensorflow.keras.models import load_model
 from tensorflow.keras.layers import Input
 from tensorflow.keras.optimizers import SGD, Adam, RMSprop, Adadelta
@@ -29,6 +26,7 @@ print("Importing helper libraries")
 from tensorflow.keras.utils import to_categorical, plot_model
 import h5py
 from sklearn.model_selection import KFold
+import matplotlib.pyplot as plt
 
 print("Importing private libraries")
 from callbacks import all_callbacks
@@ -36,37 +34,53 @@ import models
 from qkeras import quantized_bits
 
 # plot diagnostic learning curves
-def diagnostics(histories):
-	for i in range(len(histories)):
-		# plot loss
-		pyplot.subplot(2, 1, 1)
-		pyplot.title('Loss (crossentropy)')
-		pyplot.plot(histories[i].history['loss'], color='blue', label='Training set')
-		pyplot.plot(histories[i].history['val_loss'], color='orange', label='Test set')
-		# plot accuracy
-		pyplot.subplot(2, 1, 2)
-		pyplot.title('Classification Accuracy')
-		pyplot.plot(histories[i].history['accuracy'], color='blue', label='Training set')
-		pyplot.plot(histories[i].history['val_accuracy'], color='orange', label='Test set')
-	pyplot.show()
+def diagnostics(histories,outdir):
+  plt.clf()
+  f, (ax1, ax2) = plt.subplots(2, sharex=True, sharey=False)
+  for i in range(len(histories)):
+    if i == 0:
+      l1, = ax1.plot(histories[i].history['loss']        , marker='o', linestyle='dashed', color='rosybrown',alpha=0.5+i/10)
+      l2, = ax1.plot(histories[i].history['val_loss']    , marker='o', linestyle='dashed', color='orangered',alpha=0.5+i/10)
+    else:
+      ax1.plot(histories[i].history['loss']        , marker='o', linestyle='dashed', color='rosybrown',alpha=0.5+i/10)
+      ax1.plot(histories[i].history['val_loss']    , marker='o', linestyle='dashed', color='orangered',alpha=0.5+i/10)
+    ax2.plot(histories[i].history['accuracy']    , marker='o', linestyle='dashed', color='rosybrown',alpha=0.5+i/10)
+    ax2.plot(histories[i].history['val_accuracy'], marker='o', linestyle='dashed', color='orangered',alpha=0.5+i/10)
+  ax1.set_ylabel("Cross entropy loss")
+  ax2.set_xlabel("Epoch")
+  ax1.text(0.98, 0.98, 'k-Fold cross-validaton , k=%i'%len(histories), verticalalignment='top',horizontalalignment='right',transform=ax1.transAxes,color='slategray', fontsize=8)
+  ax2.set_ylabel("Classification accuracy")
+  ax1.set_yscale("log", nonposy='clip')
+  #ax2.set_yscale("log", nonposy='clip')
+  plt.legend([l1, l2],["Train (per fold)", "Test (per fold)"])
+  plt.savefig(outdir+'/learning_curve.png')
   
 # evaluate model with k-fold cross-validation
 def evaluateModel(model,dataX, dataY,epochs,batch_size,callbacks, n_folds=5):
 	scores, histories = list(), list()
 	kfold = KFold(n_folds, shuffle=True, random_state=1)
-	for train_ix, test_ix in kfold.split(dataX):
+	for i,(train_ix, test_ix) in enumerate(kfold.split(dataX)):
 		trainX, trainY, testX, testY = dataX[train_ix], dataY[train_ix], dataX[test_ix], dataY[test_ix]
-		history = model.fit(trainX, trainY, epochs=epochs, batch_size=batch_size, validation_data=(testX, testY), verbose=0,callbacks=callbacks)
+		history = model.fit(trainX, trainY, epochs=epochs, batch_size=batch_size, validation_data=(testX, testY), verbose=0)#,callbacks=callbacks)
 		_, acc = model.evaluate(testX, testY, verbose=0)
-		print('> %.3f' % (acc * 100.0))
+		print(' Accuracy after fold %i = > %.3f' % (i,acc * 100.0))
 		scores.append(acc)
 		histories.append(history)
 	return scores, histories
 
-def performanceSummary(scores):
-	print('Accuracy: mean=%.3f std=%.3f, n=%d' % (mean(scores)*100, std(scores)*100, len(scores)))
-	pyplot.boxplot(scores)
-	pyplot.show()  
+def performanceSummary(scores,outdir):
+	plt.clf()
+	label = ('$<m>=%.3f$ $\sigma$=%.3f (k=%i)' % (np.mean(scores)*100, np.std(scores)*100, len(scores)))
+	fig, ax = plt.subplots()
+	bp1 = ax.boxplot(scores, bootstrap=1000, notch=True, patch_artist=True, boxprops=dict(facecolor="rosybrown"),medianprops=dict(color="orangered"),showfliers=False)
+	ax.legend([bp1["boxes"][0]], [label], loc='upper right')
+	ax.text(0.98, 0.98, 'k-Fold cross-validaton , k=%i'%len(scores), verticalalignment='top',horizontalalignment='right',transform=ax.transAxes,color='slategray', fontsize=8)
+	
+	plt.ylabel("Accuracy")
+	labels = [item.get_text() for item in ax.get_xticklabels()]
+	labels[0] = '$<32,16>$'
+	ax.set_xticklabels(labels)
+	plt.savefig(outdir+'/performance_summary.png')
 
 def getDatasets(nclasses,useFashion=False):
     
@@ -125,6 +139,17 @@ def getModel(yamlConfig):
     keras_model.compile(loss=yamlConfig['KerasLoss'], optimizer=Adam(lr=0.0001, decay=0.000025), metrics=['accuracy'])
     return keras_model
 
+def getCallbacks():
+  callbacks=all_callbacks(stop_patience=1000,
+  lr_factor=0.5,
+  lr_patience=10,
+  lr_epsilon=0.000001,
+  lr_cooldown=2,
+  lr_minimum=0.0000001,
+  outputDir=outdir)
+  callbacks = callbacks.callbacks
+  return callbacks
+  
 def parse_config(config_file) :
 
   print("Loading configuration from", config_file)
@@ -141,10 +166,10 @@ if __name__ == "__main__":
   outdir = yamlConfig['OutputDir']
   if not os.path.exists(outdir): os.system('mkdir '+outdir)
   else: input("Warning: output directory exists. Press Enter to continue...")
-  
 
-  epochs = yamlConfig['Epochs']
-  batchsize = 32
+  epochs    = yamlConfig['Epochs']
+  batchsize = yamlConfig['Batchsize'] 
+  kFolds    = yamlConfig['Folds']
   
   print("Getting datasets")
   X_train, X_test, Y_train, Y_test  = getDatasets(nclasses=10,useFashion=options.fashionMNIST)
@@ -153,20 +178,12 @@ if __name__ == "__main__":
   
   print("Defining model")
   model = getModel(yamlConfig)
+  callbacks = getCallbacks()
   
   print("Evaluating model")
-  
-  callbacks=all_callbacks(stop_patience=1000,
-  lr_factor=0.5,
-  lr_patience=10,
-  lr_epsilon=0.000001,
-  lr_cooldown=2,
-  lr_minimum=0.0000001,
-  outputDir=outdir)
-  callbacks = callbacks.callbacks
-  scores, histories = evaluateModel(model,X_train,Y_train,epochs,batchsize,callbacks,n_folds=5)
+  scores, histories = evaluateModel(model,X_train,Y_train,epochs,batchsize,callbacks,n_folds=kFolds)
   
   print("Plotting loss and accuracy")
-  diagnostics(histories)
+  diagnostics(histories,outdir)
   print("Accuracy mean and spread")
-  summarize_performance(scores)
+  performanceSummary(scores,outdir)
