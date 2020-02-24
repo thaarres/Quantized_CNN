@@ -10,6 +10,7 @@ np.random.seed(1337)  # for reproducibility
 import sys, os, yaml
 from optparse import OptionParser
 
+
 print("Importing TensorFlow")
 import tensorflow
 from tensorflow.keras.datasets import mnist, fashion_mnist
@@ -28,6 +29,7 @@ print("Importing helper libraries")
 from tensorflow.keras.utils import to_categorical, plot_model
 import h5py
 from sklearn.model_selection import KFold
+from sklearn.model_selection import StratifiedShuffleSplit
 import matplotlib.pyplot as plt
 from scipy.io import loadmat
 
@@ -37,7 +39,16 @@ import models
 from qkeras import quantized_bits
 from utils import getDatasets, toJSON, parse_config, trainingDiagnostics, performanceSummary, getCallbacks
 
-  
+print("Limit GPU usage")
+import setGPU
+from tensorflow.compat.v1 import ConfigProto
+from tensorflow.compat.v1 import InteractiveSession
+
+config = ConfigProto()
+config.gpu_options.per_process_gpu_memory_fraction = 0.35
+config.gpu_options.allow_growth = True
+session = InteractiveSession(config=config)
+
 # Fit with k-fold cross-validation
 def evaluateModel(yamlConfig,dataX, dataY,epochs,batch_size, n_folds,outdir):
   earlyStopping = EarlyStopping(monitor='val_loss', patience=10, verbose=0, mode='min')
@@ -47,7 +58,9 @@ def evaluateModel(yamlConfig,dataX, dataY,epochs,batch_size, n_folds,outdir):
   reduce_lr_loss = ReduceLROnPlateau(monitor='val_loss', factor=0.1, patience=7, verbose=1, epsilon=1e-4, mode='min')
   scores, histories = list(), list()
   kfold = KFold(n_folds, shuffle=True, random_state=1)
+  # sss = StratifiedShuffleSplit(dataY, 10, train_size=0.8, random_state=0)
   for train_ix, test_ix in kfold.split(dataX):
+  # for train_ix, test_ix in sss.split(dataX,dataY):
     model = getModel(yamlConfig)
     trainX, trainY, testX, testY = dataX[train_ix], dataY[train_ix], dataX[test_ix], dataY[test_ix]
     history = model.fit(trainX, trainY, epochs=epochs, batch_size=batch_size, validation_data=(testX, testY), verbose=0,callbacks=[earlyStopping, mcp_save_m,mcp_save_w,reduce_lr_loss])
@@ -56,8 +69,11 @@ def evaluateModel(yamlConfig,dataX, dataY,epochs,batch_size, n_folds,outdir):
     scores.append(acc)
     histories.append(history)
 	
+  print(scores)
+  print(histories)
+  
   np.savez(outdir+"/scores", scores)
-  np.savez(outdir+"/histories", histories)
+  #np.savez(outdir+"/histories", histories) #TO DO How to save TF object?
   
   return scores, histories
   
@@ -96,7 +112,7 @@ if __name__ == "__main__":
   parser = OptionParser()
   parser.add_option('-o','--outdir'   ,action='store',type='string',dest='outdir'   ,default='', help='yaml config file')
   parser.add_option('-c','--config'   ,action='store',type='string',dest='config'   ,default='mnist.yml', help='yaml config file')
-  parser.add_option('-s','--svhn',action='store_true', dest='svhn', default=False, help='Use SVHN')
+  parser.add_option('-s','--svhn',action='store_true', dest='svhn', default=True, help='Use SVHN')
   parser.add_option('--mnist',action='store_true', dest='mnist', default=False, help='Use MNIST')
   (options,args) = parser.parse_args()
 
@@ -114,9 +130,10 @@ if __name__ == "__main__":
   kFolds    = yamlConfig['Folds']
   
   print("Getting datasets")
-  X_train, X_test, Y_train, Y_test  = getDatasets(nclasses=10,mnist=options.mnist,svhn=options.svhn)
+  X_train, X_test, Y_train, Y_test  = getDatasets(nclasses=10,doMnist=options.mnist,doSvhn=options.svhn)
   nclasses    = Y_train.shape[1]
   input_shape = X_train.shape[1:]
+  print("Training on N training samples" , X_train.shape[0])
   
   print("Evaluating model")
   scores, histories = evaluateModel(yamlConfig,X_train,Y_train,epochs,batchsize,kFolds,outdir)
