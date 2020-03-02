@@ -209,7 +209,7 @@ n_epochs = 100
 # the bounds dict should be in order of continuous type and then discrete type
 bounds = [{'name': 'optmizer_index',        'type': 'discrete',   'domain': (0, 1, 2)},
           {'name': 'CNN_filters',           'type': 'discrete',   'domain': (8, 16, 32)},
-          {'name': 'CNN_filter_size',       'type': 'discrete',   'domain': (2, 3, 5)},
+          {'name': 'CNN_filter_size',       'type': 'discrete',   'domain': (2, 3)},
           {'name': 'CNN_MaxPool_size',      'type': 'discrete',   'domain': (1, 2, 3)},
           {'name': 'CNN_layers',            'type': 'discrete',   'domain': (1, 2, 3)},
           {'name': 'CNN_activation_index',  'type': 'discrete',   'domain': (0, 1)},
