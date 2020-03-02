@@ -8,94 +8,47 @@ from qkeras import quantized_bits
 from qkeras import QBatchNormalization
 import sys
 
-def float_cnn(Inputs,nclasses,filters,kernel,strides,activation):
-  x = Conv2D(int(filters[0]),
-             kernel_size=(int(kernel[0]),int(kernel[0])),
-             strides=(int(strides[0]),int(strides[0])),
-             name='conv_0')(Inputs)
-  x = Activation(activation)(x)
-  x = BatchNormalization()(x)
-  # x = MaxPooling2D(pool_size = 2)(x)
-  # x = Dropout(0.04)(x)
-  for i,(f,k,s) in enumerate(zip(filters,kernel,strides)):
+def float_cnn(Inputs,nclasses,filters,kernel,strides, pooling, dropout, activation):
+  length = len(filters)
+  if any(len(lst) != length for lst in [filters, kernel, strides,pooling,dropout]):
+    sys.exit("One value for stride and kernel must be added for each filter! Exiting") 
+   
+  x = x_in = Inputs
+  for i,(f,k,s,p,d) in enumerate(zip(filters,kernel,strides,pooling,dropout)):
     print (("Adding layer with {} filters, kernel_size=({},{}), strides=({},{})").format(f,k,k,s,s))
-    x = Conv2D(int(f),
-               kernel_size=(int(k), int(k)),
-               strides=(int(s),int(s)),
-               name='conv_%i'%(i+1))(x)
+    x = Conv2D(int(f), kernel_size=(int(k), int(k)), strides=(int(s),int(s)),
+               name='conv_%i'%i)(x)
+    x = BatchNormalization()(x)
     x = Activation(activation)(x)
-    x = BatchNormalization()(x)
-    # x = MaxPooling2D( pool_size = 2)(x)
-    # x = Dropout(0.04)(x)
+    x = MaxPooling2D(pool_size = int(p))(x)
+    # x = Dropout(float(d))(x)
   x = Flatten()(x)
-  x = Dense(28, activation='selu',name='dense0')(x)
-  x = Dense(28, activation='selu',name='dense1')(x)
-  x = Dropout(0.04,name='drop')(x)
-  predictions = Dense(nclasses, activation='softmax',name='output')(x)
-  model = Model(inputs=Inputs, outputs=predictions)
-  return model 
+  x = Dense(nclasses)(x)
+  x = Activation("softmax")(x)
+  model = Model(inputs=[x_in], outputs=[x])
+  return model
 
-def quantized_cnn(Inputs,nclasses,filters,kernel,strides,activation="quantized_relu(32,16)",quantizer_dense=quantized_bits(1),quantizer_cnn=quantized_bits(1)):
-  x = QConv2D(int(filters[0]),
-             kernel_size=(int(kernel[0]),int(kernel[0])),
-             strides=(int(strides[0]),int(strides[0])),
-             kernel_quantizer=quantizer_cnn,
-             bias_quantizer  =quantizer_cnn,
-             name='conv_0')(Inputs)
-  x = QActivation(activation)(x)
-  x = BatchNormalization()(x)
-  # x = MaxPooling2D(pool_size = 2)(x)
-  x = Dropout(0.04)(x)
-  for i,(f,k,s) in enumerate(zip(filters,kernel,strides)):
-    print (("Adding layer with {} filters, kernel_size=({},{}), strides=({},{})").format(f,k,k,s,s))
-    x = QConv2D(int(f),
-               kernel_size=(int(k), int(k)),
-               strides=(int(s),int(s)),
-               kernel_quantizer=quantizer_cnn,
-               bias_quantizer  =quantizer_cnn,
-               name='conv_%i'%(i+1))(x)
-    x = QActivation(activation)(x)
-    x = BatchNormalization()(x)
-    # x = MaxPooling2D( pool_size = 2)(x)
-    x = Dropout(0.04)(x)
-  x = Flatten()(x)
-  x = QDense( 28,
-              kernel_quantizer=quantizer_dense,
-              bias_quantizer  =quantizer_dense, 
-              use_bias=False,
-              name='dense0')(x)
-  x = QActivation(activation,name='act_0')(x)
-  x = QDense( 28,
-              kernel_quantizer=quantizer_dense,
-              bias_quantizer  =quantizer_dense, 
-              use_bias=False,
-              name='dense1')(x)
-  x = QActivation(activation,name='act_last')(x)
-  predictions = Dense(nclasses, activation='softmax',name='output')(x)
-  model = Model(inputs=Inputs, outputs=predictions)
-  return model 
-
-# def quantized_cnn(Inputs,nclasses,filters,kernel,strides,activation="quantized_relu(32,16)",quantizer_dense=quantized_bits(1),quantizer_cnn=quantized_bits(1)):
-#    x = Inputs
-#    for f,k,s in zip(filters,kernel,strides):
-#      print (("Adding layer with {} filters, kernel_size=({},{}), strides=({},{})").format(f,k,k,s,s))
-#      x = QConv2D(int(f),
-#                 kernel_size=(int(k), int(k)),
-#                 strides=(int(s),int(s)),
-#                 kernel_quantizer=quantizer_cnn,
-#                 bias_quantizer  =quantizer_cnn,
-#                 name='conv_%s'%f)(x)
-#      x = QActivation(activation, name="act%s"%f)(x)
-#      x = QBatchNormalization()(x)
-#    x = Flatten()(x)
-#    x = QDense( 128,
-#                kernel_quantizer=quantizer_dense,
-#                bias_quantizer  =quantizer_dense,
-#                use_bias=False,
-#                name='dense1')(x)
-#    x = QActivation(activation,name='act_last')(x)
-#    #x = Dropout(0.5,name='drop')(x)
-#    predictions = Dense(nclasses, activation='softmax',name='output')(x)
-#    model = Model(inputs=Inputs, outputs=predictions)
-#    return model
-#
+def quantized_cnn(Inputs,nclasses,filters,kernel,strides, pooling, dropout, activation="quantized_relu(32,16)",quantizer_cnn=quantized_bits(1),quantizer_dense=quantized_bits(1)):
+   
+   length = len(filters)
+   if any(len(lst) != length for lst in [filters, kernel, strides, pooling, dropout]):
+     sys.exit("One value for stride and kernel must be added for each filter! Exiting") 
+    
+   x = x_in = Inputs
+   for i,(f,k,s,p,d) in enumerate(zip(filters,kernel,strides,pooling,dropout)):
+     print (("Adding layer with {} filters, kernel_size=({},{}), strides=({},{})").format(f,k,k,s,s))
+     x = QConv2D(int(f), kernel_size=(int(k), int(k)), strides=(int(s),int(s)),
+                kernel_quantizer = quantizer_cnn,
+                bias_quantizer   = quantizer_cnn,
+                name='conv_%i'%i)(x)
+     x = BatchNormalization()(x)
+     x = QActivation(activation)(x)
+     x = MaxPooling2D(pool_size = int(p))(x)
+     # x = Dropout(float(d))(x)
+   x = Flatten()(x)
+   x = QDense(nclasses,
+              kernel_quantizer = quantizer_dense,
+              bias_quantizer   = quantizer_dense)(x)
+   x = Activation("softmax")(x)
+   model = Model(inputs=[x_in], outputs=[x])
+   return model

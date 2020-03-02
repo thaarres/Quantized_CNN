@@ -6,6 +6,8 @@ import json
 
 print("Importing TensorFlow")
 import tensorflow
+import tensorflow as tf
+import tensorflow_datasets as tfds
 from tensorflow.keras.datasets import mnist, fashion_mnist
 from tensorflow.keras.models import load_model
 from tensorflow.keras.layers import Input
@@ -17,6 +19,7 @@ print("Using Keras version: {}".format(tensorflow.keras.__version__))
 import tensorflow.keras.backend as K
 K.set_image_data_format('channels_last')
 print("Forcing image data format to ".format(K.image_data_format()))
+#import tensorflow_datasets as tfds
 
 print("Importing helper libraries")
 from tensorflow.keras.utils import to_categorical, plot_model
@@ -68,52 +71,101 @@ def plot_images(img, labels, nrows, ncols,outname='svhn_data.png'):
         ax.set_xticks([]); ax.set_yticks([])
         ax.set_title(labels[i])
     fig.savefig(outname)    
-    
-def getDatasets(nclasses,mnist=False,svhn=False,greyScale=False):
+
+# def getTFDatasets(name='svhn_cropped'):
+#   ##TO DO
+#   train = tfds.load(name=name, split="train")
+#   assert isinstance(train, tf.data.Dataset)
+#   print(train)
+#   for example in train.take(1):  # Only take a single example
+#     image, label = train["image"], train["label"]
+#     plt.imshow(image.numpy()[:, :, 0].astype(np.float32), cmap=plt.get_cmap("gray"))
+#     print("Label: %d" % label.numpy())
+#   return train
   
-  if svhn:
+    
+def getDatasets(nclasses,doMnist=False,doSvhn=False,greyScale=False,ext=False):
+  
+  if doSvhn:
+    
     mat_train = loadmat('train_32x32.mat', squeeze_me=True)     # 73257 +extra:531131
     mat_test  = loadmat('test_32x32.mat', squeeze_me=True)     # 26032
-    X_train = mat_train['X']
-    y_train = mat_train['y']
-    X_test  = mat_test['X']
+    
+    if ext:
+      mat_train_ext = loadmat('extra_32x32.mat', squeeze_me=True)
+      x_train = np.concatenate((mat_train['X'] , mat_train_ext['X']), axis=-1)
+      y_train = np.concatenate((mat_train['y'] , mat_train_ext['y']))
+    else:
+      x_train = mat_train['X']
+      y_train = mat_train['y']
+      
+    x_test  = mat_test['X']
     y_test  = mat_test['y']
   
-    X_train, X_test =  X_train.transpose((3,0,1,2)), X_test.transpose((3,0,1,2))
-    X_train = X_train.astype('float32')
-    X_test  = X_test.astype('float32')
-    X_train /= 255.0
-    X_test /= 255.0
+    x_train, x_test =  x_train.transpose((3,0,1,2)), x_test.transpose((3,0,1,2))
+    x_train = x_train.astype('float32')
+    x_test  = x_test.astype('float32')
+    x_train /= 255.0
+    x_test /= 255.0
     
     y_train[y_train == 10] = 0
     y_test[y_test == 10] = 0
-    Y_train = to_categorical(y_train, nclasses)
-    Y_test  = to_categorical(y_test , nclasses)
+    y_train = to_categorical(y_train, nclasses)
+    y_test  = to_categorical(y_test , nclasses)
     
     if greyScale:
-      X_train = rgb2gray(X_train).astype(np.float32)
-      X_test = rgb2gray(X_test).astype(np.float32)
+      x_train = rgb2gray(x_train).astype(np.float32)
+      x_test  = rgb2gray(x_test).astype(np.float32)
       
-    plot_images(X_train, y_train, 2, 8)
+    #plot_images(X_train, y_train, 2, 8)
 
   else:
     
-    if mnist:
-      (X_train, y_train), (X_test, y_test) = mnist.load_data()
+    if doMnist:
+      (x_train, y_train), (x_test, y_test) = mnist.load_data()
     else:    
-      (X_train, y_train), (X_test, y_test) = fashion_mnist.load_data()
-    X_train = np.expand_dims(X_train,axis=-1)
-    X_test  = np.expand_dims(X_test,axis=-1)
-    X_train = X_train.astype('float32')
-    X_test  = X_test.astype('float32')
-    X_train /= 255
-    X_test  /= 255
-  
-    Y_train = to_categorical(y_train, nclasses)
-    Y_test  = to_categorical(y_test , nclasses)
-    
-  return X_train,X_test,Y_train,Y_test
+      (x_train, y_train), (x_test, y_test) = fashion_mnist.load_data()
 
+    x_test_orig = x_test
+
+    x_train = x_train.astype("float32")
+    x_test  = x_test.astype("float32")
+
+    x_train = x_train[..., np.newaxis]
+    x_test  = x_test[..., np.newaxis]
+
+    x_train /= 255.0
+    x_test /= 255.0
+
+    print(x_train.shape[0], "train samples")
+    print(x_test.shape[0], "test samples")
+
+    print(y_train[0:10])
+
+    y_train = to_categorical(y_train, nclasses)
+    y_test  = to_categorical(y_test, nclasses)
+  
+  return x_train,x_test,y_train,y_test
+
+def preprocess(image, label,nclasses=10):
+  image = tf.cast(image, tf.float32) / 255.
+  #label = tf.one_hot(tf.squeeze(label), nclasses)
+  return image, label
+  
+def getKfoldDataset(name="svhn_cropped",extra=False,val_percent=10):    
+  # Construct a tf.data.Dataset
+  # dataset, info  = tfds.load(name=name, with_info=True, as_supervised=True)
+  # train_, test_, extra_ = dataset['train'], dataset['test'], dataset['extra']
+  test_data = tfds.load(name, split=[f'test[:{k}%]+test[{k+20}%:]+test[:{k}%]+test[{k+20}%:]'for k in range(0, 100, 20)], as_supervised=True)
+  if extra:
+      val_data         = tfds.load(name, split=[f'train[{k}%:{k+10}%]+extra[{k}%:{k+10}%]'for k in range(0, 100, 10)], with_info=False, as_supervised=True)
+      train_data, info = tfds.load(name, split=[f'train[:{k}%]+train[{k+10}%:]+extra[:{k}%]+extra[{k+10}%:]'for k in range(0, 100, 10)], with_info=True, as_supervised=True)
+  else:                           
+    val_data         = tfds.load(name, split=[f'train[{k}%:{k+10}%]'for k in range(0, 100, 10)], with_info=False, as_supervised=True)
+    train_data, info = tfds.load(name, split=[f'train[:{k}%]+train[{k+10}%:]'for k in range(0, 100, 10)], with_info=True, as_supervised=True) 
+  
+  return test_data, train_data, val_data, info
+  
 def trainingDiagnostics(histories,outdir,filename='/learning_curve.png'):
   plt.clf()
   f, (ax1, ax2) = plt.subplots(2, sharex=True, sharey=False)
@@ -130,23 +182,36 @@ def trainingDiagnostics(histories,outdir,filename='/learning_curve.png'):
   ax2.set_xlabel("Epoch")
   ax1.text(0.98, 0.98, 'k-Fold cross-validaton , k=%i'%len(histories), verticalalignment='top',horizontalalignment='right',transform=ax1.transAxes,color='slategray', fontsize=8)
   ax2.set_ylabel("Classification accuracy")
-  #ax1.set_yscale("log", nonposy='clip')
-  #ax2.set_yscale("log", nonposy='clip')
+  #ax1.set_ypreprocess("log", nonposy='clip')
+  #ax2.set_ypreprocess("log", nonposy='clip')
   plt.legend([l1, l2],["Train (per fold)", "Test (per fold)"])
   plt.savefig(outdir+filename)
 
-def performanceSummary(scores,outdir,outname='/performance_summary.png'):
+def performanceSummary(scores,labels, outdir,outname='/performance_summary.png'):
 	plt.clf()
-	label = ('$<m>=%.3f$ $\sigma$=%.3f (k=%i)' % (np.mean(scores)*100, np.std(scores)*100, len(scores)))
 	fig, ax = plt.subplots()
-	bp1 = ax.boxplot(scores, bootstrap=1000, notch=True, patch_artist=True, boxprops=dict(facecolor="rosybrown"),medianprops=dict(color="orangered"),showfliers=False)
-	ax.legend([bp1["boxes"][0]], [label], loc='upper right')
-	ax.text(0.98, 0.98, 'k-Fold cross-validaton , k=%i'%len(scores), verticalalignment='top',horizontalalignment='right',transform=ax.transAxes,color='slategray', fontsize=8)
+	#boxes = []
+	bp1 = ax.boxplot(scores[0], positions=[1], notch=False, widths=0.35, 
+	                 patch_artist=True, boxprops=dict(facecolor="C0"))
+	bp2 = ax.boxplot(scores[1], positions=[2], notch=False, widths=0.35, 
+	                 patch_artist=True, boxprops=dict(facecolor="C2"))
 	
+	ax.legend([bp1["boxes"][0], bp2["boxes"][0]], [labels[0], labels[1]], loc='upper right')
+	
+	ax.set_xlim(0,6)
+	
+	# for i,(score,label) in enumerate(zip(scores,labels)):
+#     boxes.append = ( ax.boxplot(score, bootstrap=1000, notch=True, patch_artist=True, boxprops=dict(facecolor="rosybrown"),medianprops=dict(color="orangered"),showfliers=False,positions=[i],widths=0.5),label=)
+#   print(boxes[i])
+#   ax.legend([boxes['boxes'][0]], [labels], loc='upper right')
+#   ax.text(0.98, 0.98, 'k-Fold cross-validaton , k=%i'%len(scores), verticalalignment='top',horizontalalignment='right',transform=ax.transAxes,color='slategray', fontsize=8)
+#
 	plt.ylabel("Accuracy")
-	labels = [item.get_text() for item in ax.get_xticklabels()]
-	labels[0] = '$<32,16>$'
-	ax.set_xticklabels(labels)
+	labels_ = [item.get_text() for item in ax.get_xticklabels()]
+	lab = ['<32,16>','<1,0>']
+	for i in range(0,len(labels)):
+	  labels_[i] = lab[i]
+	ax.set_xticklabels(labels_)
 	plt.savefig(outdir+outname)
 
 def getCallbacks():

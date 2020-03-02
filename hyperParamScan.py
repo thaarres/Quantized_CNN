@@ -13,7 +13,7 @@
 # https://github.com/SheffieldML/GPy
 # https://github.com/SheffieldML/GPyOpt
 
-
+from scipy.io import loadmat
 import sys
 import h5py
 import glob
@@ -39,7 +39,68 @@ import GPyOpt
 import GPy
 import setGPU
 #Private libraries
-from utils import getDatasets
+def getDatasets(nclasses,doMnist=False,doSvhn=False,greyScale=False,ext=False):
+  
+  if doSvhn:
+    
+    mat_train = loadmat('train_32x32.mat', squeeze_me=True)     # 73257 +extra:531131
+    mat_test  = loadmat('test_32x32.mat', squeeze_me=True)     # 26032
+    
+    if ext:
+      mat_train_ext = loadmat('extra_32x32.mat', squeeze_me=True)
+      x_train = np.concatenate((mat_train['X'] , mat_train_ext['X']), axis=-1)
+      y_train = np.concatenate((mat_train['y'] , mat_train_ext['y']))
+    else:
+      x_train = mat_train['X']
+      y_train = mat_train['y']
+      
+    x_test  = mat_test['X']
+    y_test  = mat_test['y']
+  
+    x_train, x_test =  x_train.transpose((3,0,1,2)), x_test.transpose((3,0,1,2))
+    x_train = x_train.astype('float32')
+    x_test  = x_test.astype('float32')
+    x_train /= 255.0
+    x_test /= 255.0
+    
+    y_train[y_train == 10] = 0
+    y_test[y_test == 10] = 0
+    y_train = to_categorical(y_train, nclasses)
+    y_test  = to_categorical(y_test , nclasses)
+    
+    if greyScale:
+      x_train = rgb2gray(x_train).astype(np.float32)
+      x_test  = rgb2gray(x_test).astype(np.float32)
+      
+    #plot_images(X_train, y_train, 2, 8)
+
+  else:
+    
+    if doMnist:
+      (x_train, y_train), (x_test, y_test) = mnist.load_data()
+    else:    
+      (x_train, y_train), (x_test, y_test) = fashion_mnist.load_data()
+
+    x_test_orig = x_test
+
+    x_train = x_train.astype("float32")
+    x_test  = x_test.astype("float32")
+
+    x_train = x_train[..., np.newaxis]
+    x_test  = x_test[..., np.newaxis]
+
+    x_train /= 255.0
+    x_test /= 255.0
+
+    print(x_train.shape[0], "train samples")
+    print(x_test.shape[0], "test samples")
+
+    print(y_train[0:10])
+
+    y_train = to_categorical(y_train, nclasses)
+    y_test  = to_categorical(y_test, nclasses)
+  
+  return x_train,x_test,y_train,y_test
 
 ####################################################
 
@@ -146,9 +207,9 @@ n_epochs = 100
 # Bayesian Optimization
 
 # the bounds dict should be in order of continuous type and then discrete type
-bounds = [{'name': 'optmizer_index',        'type': 'discrete',   'domain': (0,1,2)},
+bounds = [{'name': 'optmizer_index',        'type': 'discrete',   'domain': (0, 1, 2)},
           {'name': 'CNN_filters',           'type': 'discrete',   'domain': (8, 16, 32)},
-          {'name': 'CNN_filter_size',       'type': 'discrete',   'domain': (2, 3)},
+          {'name': 'CNN_filter_size',       'type': 'discrete',   'domain': (2, 3, 5)},
           {'name': 'CNN_MaxPool_size',      'type': 'discrete',   'domain': (1, 2, 3)},
           {'name': 'CNN_layers',            'type': 'discrete',   'domain': (1, 2, 3)},
           {'name': 'CNN_activation_index',  'type': 'discrete',   'domain': (0, 1)},
@@ -156,7 +217,7 @@ bounds = [{'name': 'optmizer_index',        'type': 'discrete',   'domain': (0,1
           {'name': 'DNN_layers',            'type': 'discrete',   'domain': (1, 2, 3)},
           {'name': 'DNN_activation_index',  'type': 'discrete',   'domain': (0, 1 )},
           {'name': 'dropout',               'type': 'continuous', 'domain': (0.0, 0.4)},
-          {'name': 'batch_size',            'type': 'discrete',   'domain': (32, 50,200)}]
+          {'name': 'batch_size',            'type': 'discrete',   'domain': (32, 50, 200, 500)}]
 
 # function to optimize model
 def f(x):

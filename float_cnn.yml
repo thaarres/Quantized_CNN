@@ -1,0 +1,12 @@
+OutputDir: float_cnn
+KerasModel: float_cnn
+Filters: 32,64,64
+Kernel: 3,3,3
+Strides: 1,1,1
+Pooling: 2,2,2
+Dropout: 0.05,0.05,0.05
+Activation: selu
+KerasLoss: categorical_crossentropy
+L1Reg: 0
+Epochs: 20
+Batchsize: 1000
