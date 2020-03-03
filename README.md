@@ -20,13 +20,13 @@ To train choose one of the provided *.yaml config files or create a new one. Spe
 To train use the command:
 
 ```
-python3 train.py -c mnist_cnn.yml
+python3 train.py -c quantized_cnn.yml
 ```
 
 To evaluate performance:
 
 ```
-python3 compare_models.py -c mnist_cnn.yml
+python3 compare_models.py -c quantized_cnn/
 ```
 
 
@@ -40,7 +40,7 @@ pip install GPyOpt --user
 ```
 Then you can do 
 ```
-python python hyperParamScan.py 
+python2 hyperParamScan.py 
 ```
 
 The hyperparameters to be optimized are listed in  the dictionary "bounds" and can be configured as desired
