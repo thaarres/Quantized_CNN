@@ -23,7 +23,7 @@ To train use the command:
 python3 train.py -c quantized_cnn.yml
 ```
 
-To evaluate performance:
+W.I.P: To evaluate performance:
 
 ```
 python3 compare_models.py -c quantized_cnn/
