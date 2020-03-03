@@ -54,46 +54,17 @@ BUFFER_SIZE = 10000 # Use a much larger value for real code.
 NCLASSES    = 10
 
 
-# # Fit with k-fold cross-validation (ScikitLearn)
-# def evaluateModel(yamlConfig,dataX, dataY,input_shape,epochs,batch_size, n_folds,outdir):
-#   earlyStopping = EarlyStopping(monitor='val_loss', patience=3, verbose=0, mode='min')
-#   mcp_save_m = ModelCheckpoint(outdir+'/bestModel.h5', save_best_only=True, monitor='val_loss', mode='min')
-#   mcp_save_w = ModelCheckpoint(outdir+'/bestWeights.h5', save_best_only=True,save_weights_only=True, monitor='val_loss', mode='min')
-#
-#   reduce_lr_loss = ReduceLROnPlateau(monitor='val_loss', factor=0.1, patience=7, verbose=1, epsilon=1e-4, mode='min')
-#   scores, histories = list(), list()
-#
-#   kfold = KFold(n_folds, shuffle=True, random_state=1)
-#   # sss = StratifiedShuffleSplit(dataY, 10, train_size=0.8, random_state=0)
-#   for train_ix, test_ix in kfold.split(dataX):
-#   # for train_ix, test_ix in sss.split(dataX,dataY):
-#     model = getModel(yamlConfig,input_shape)
-#     trainX, trainY, testX, testY = dataX[train_ix], dataY[train_ix], dataX[test_ix], dataY[test_ix]
-#     history = model.fit(trainX, trainY, epochs=epochs, batch_size=batch_size, validation_data=(testX, testY), verbose=1,callbacks=[earlyStopping, mcp_save_m,mcp_save_w,reduce_lr_loss])
-#     _, acc = model.evaluate(testX, testY, verbose=0)
-#     print(' Accuracy after fold = > %.3f' % (acc * 100.0))
-#     scores.append(acc)
-#     histories.append(history)
-#
-#   print(scores)
-#   print(histories)
-#
-#   np.savez(outdir+"/scores", scores)
-#   #np.savez(outdir+"/histories", histories) #TO DO How to save TF object?
-#
-#   return scores, histories
-
 def getCallbacks():
-  earlyStopping = EarlyStopping(monitor='val_loss', patience=3, verbose=0, mode='min')
+  earlyStopping = EarlyStopping(monitor='val_loss', patience=3, verbose=1, mode='min')
   mcp_save_m    = ModelCheckpoint(outdir+'/bestModel.h5', save_best_only=True, monitor='val_loss', mode='min')
   mcp_save_w    = ModelCheckpoint(outdir+'/bestWeights.h5', save_best_only=True,save_weights_only=True, monitor='val_loss', mode='min')
   tensorboard   = tf.keras.callbacks.TensorBoard(log_dir='./logs/model1', update_freq='batch')
   reduce_lr_loss = ReduceLROnPlateau(monitor='val_loss')#, factor=0.1, patience=7, verbose=1, epsilon=1e-4, mode='min')
   
-  return [earlyStopping, mcp_save_m,mcp_save_w,reduce_lr_loss]
+  return [tensorboard,earlyStopping, mcp_save_m,mcp_save_w,reduce_lr_loss]
 
 
-def evaluateModel(yamlConfig,test_data, train_data_list, val_data_list, epochs, batch_size, nclasses, input_shape,train_size, outdir):
+def evaluateModel(yamlConfig, train_data_list, val_data_list, epochs, batch_size, nclasses, input_shape,train_size, outdir):
   
   # BATCH_SIZE_PER_REPLICA = batch_size
   # BATCH_SIZE = BATCH_SIZE_PER_REPLICA * strategy.num_replicas_in_sync
@@ -109,12 +80,8 @@ def evaluateModel(yamlConfig,test_data, train_data_list, val_data_list, epochs, 
     print('img_feature.shape (batch_size, image_height, image_width) =', img_feature.shape)
     print('label.shape (batch_size, number_of_labels) =', label.shape)
     
-    # image_batch, label_batch = next(iter(train_data))
-    
-    # image_batch, label_batch = next(iter(train_data))
-# Val data = 30220, Train data = 574168 , Test data = 26032
-    steps_per_epoch      = int(574168*.9)  // batch_size
-    eval_steps_per_epoch = int (30220*.1) // batch_size
+    steps_per_epoch      = int(train_size*0.9)  // batch_size #90% train, 10% validation in 10-fold xval
+    eval_steps_per_epoch = int(train_size*0.1) // batch_size
       
     
   
@@ -129,14 +96,13 @@ def evaluateModel(yamlConfig,test_data, train_data_list, val_data_list, epochs, 
                         callbacks=allCallbacks,
                         verbose=1)
     
-    # test_data  = test_data.map(preprocess).batch(batch_size, drop_remainder=True)
     loss, acc = model.evaluate(val_data)
     print("Loss {}, Val accuracy {}".format(loss, acc ))  
     print("Loss {}, Val accuracy {}".format(loss, acc ))  
     print("Loss {}, Val accuracy {}".format(loss, acc ))  
-    sys.exit()
     scores.append(acc)
     histories.append(history)
+  np.savez(outdir+"/scores", scores)  
   model.save(outdir+'finalModel.h5', save_format='tf')
   return scores, histories
   
@@ -201,33 +167,22 @@ if __name__ == "__main__":
 
   epochs    = yamlConfig['Epochs']
   batchsize = yamlConfig['Batchsize'] 
-  # kFolds    = yamlConfig['Folds']
-  
-  # print("Getting datasets")
-#   X_train, X_test, Y_train, Y_test  = getDatasets(NCLASSES=10,doMnist=options.mnist,doSvhn=options.svhn)
-#   NCLASSES    = Y_train.shape[1]
-#   input_shape = X_train.shape[1:]
-#   print("Training on N training samples" , X_train.shape[0])
-#
+
+
   extra = True
-  test_data, train_data_list, val_data_list, info = getKfoldDataset(name="svhn_cropped",extra=extra) # Val data = 30220, Train data = 574168 , Test data = 26032
+  test_data_list, train_data_list, val_data_list, info = getKfoldDataset(name="svhn_cropped",extra=extra) # Val data = 30220, Train data = 574168 , Test data = 26032
   nclasses    = info.features['label'].num_classes
   input_shape = info.features['image'].shape 
   if extra:
     train_size  = info.splits['train'].num_examples + info.splits['extra'].num_examples
   else:
     train_size = info.splits['train'].num_examples
-  
-  # TESTING=True
-  # if TESTING:
-  #   STEPS_PER_EPOCH = 5
-  #   mini = train_data_list[0].take(STEPS_PER_EPOCH)
     
   print("Using {}-fold training and validation data".format(len(train_data_list)))
   print("Evaluating model")
-  scores, histories = evaluateModel(yamlConfig,test_data, train_data_list, val_data_list, epochs, batchsize, nclasses, input_shape,train_size, outdir)
+  scores, histories = evaluateModel(yamlConfig, train_data_list, val_data_list, epochs, batchsize, nclasses, input_shape,train_size, outdir)
 
   print("Plotting loss and accuracy")
   trainingDiagnostics(histories,outdir)
-  print("Accuracy mean and spread")
-  performanceSummary(scores,outdir)
+  # print("Accuracy mean and spread")
+  # performanceSummary(scores,outdir)
