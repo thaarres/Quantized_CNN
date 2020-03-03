@@ -39,10 +39,8 @@ import GPyOpt
 import GPy
 import setGPU
 #Private libraries
-def getDatasets(nclasses,doMnist=False,doSvhn=False,greyScale=False,ext=False):
-  
-  if doSvhn:
-    
+def getDatasets(nclasses,doMnist=False,doSvhn=True,greyScale=False,ext=False):
+
     mat_train = loadmat('train_32x32.mat', squeeze_me=True)     # 73257 +extra:531131
     mat_test  = loadmat('test_32x32.mat', squeeze_me=True)     # 26032
     
@@ -73,34 +71,8 @@ def getDatasets(nclasses,doMnist=False,doSvhn=False,greyScale=False,ext=False):
       x_test  = rgb2gray(x_test).astype(np.float32)
       
     #plot_images(X_train, y_train, 2, 8)
-
-  else:
-    
-    if doMnist:
-      (x_train, y_train), (x_test, y_test) = mnist.load_data()
-    else:    
-      (x_train, y_train), (x_test, y_test) = fashion_mnist.load_data()
-
-    x_test_orig = x_test
-
-    x_train = x_train.astype("float32")
-    x_test  = x_test.astype("float32")
-
-    x_train = x_train[..., np.newaxis]
-    x_test  = x_test[..., np.newaxis]
-
-    x_train /= 255.0
-    x_test /= 255.0
-
-    print(x_train.shape[0], "train samples")
-    print(x_test.shape[0], "test samples")
-
-    print(y_train[0:10])
-
-    y_train = to_categorical(y_train, nclasses)
-    y_test  = to_categorical(y_test, nclasses)
   
-  return x_train,x_test,y_train,y_test
+    return x_train,x_test,y_train,y_test
 
 ####################################################
 
@@ -177,7 +149,7 @@ class myModel():
 
         self.__model.fit(self.__x_train, self.__y_train, epochs=self.epochs, 
                                    batch_size= self.batch_size, validation_data=[self.__x_test, self.__y_test],verbose=0, 
-                                   callbacks = [EarlyStopping(monitor='val_loss', patience=5, verbose=0),
+                                   callbacks = [EarlyStopping(monitor='val_loss', patience=5, verbose=1),
                                                            ReduceLROnPlateau(monitor='val_loss', factor=0.1, patience=5, verbose=0), 
                                                            TerminateOnNaN()])
     # evaluate  model
@@ -217,7 +189,7 @@ bounds = [{'name': 'optmizer_index',        'type': 'discrete',   'domain': (0, 
           {'name': 'DNN_layers',            'type': 'discrete',   'domain': (1, 2, 3)},
           {'name': 'DNN_activation_index',  'type': 'discrete',   'domain': (0, 1 )},
           {'name': 'dropout',               'type': 'continuous', 'domain': (0.0, 0.4)},
-          {'name': 'batch_size',            'type': 'discrete',   'domain': (32, 50, 200, 500)}]
+          {'name': 'batch_size',            'type': 'discrete',   'domain': (32, 50, 200, 500,1000)}]
 
 # function to optimize model
 def f(x):
@@ -241,7 +213,7 @@ def f(x):
 
 if __name__ == "__main__":
   opt_model = GPyOpt.methods.BayesianOptimization(f=f, domain=bounds)
-  opt_model.run_optimization(max_iter=1000,report_file='bayOpt.txt')
+  opt_model.run_optimization(max_iter=10000,report_file='bayOpt.txt')
   opt_model.plot_acquisition('bayOpt_acqu.pdf')
   opt_model.plot_convergence('bayOpt_conv.pdf')
 
