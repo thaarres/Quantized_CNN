@@ -20,6 +20,7 @@ def float_cnn(Inputs,nclasses,filters,kernel,strides, pooling, dropout, activati
     x = Conv2D(int(f), kernel_size=(int(k), int(k)), strides=(int(s),int(s)),
                name='conv_%i'%i)(x)
     x = Activation(activation)(x)
+    # mlpconvs=[16,16,16]
     # if (i % 2) == 0:
     #   x = Conv2D(mlpconvs[i], kernel_size=(1,1), strides=(1,1),
     #              name='mlpconv_%i'%i)(x)
@@ -29,10 +30,10 @@ def float_cnn(Inputs,nclasses,filters,kernel,strides, pooling, dropout, activati
    # x = BatchNormalization()(x)
     if float(p) != 0:
       x = MaxPooling2D(pool_size = (int(p),int(p)) )(x)
-    x = Dropout(float(d))(x)
   x = Flatten()(x)
+  x = Dropout(float(d))(x)
   x = Dense(128)(x)
-  x = Activation("relu")(x)
+  x = Activation(activation)(x)
   x = BatchNormalization()(x)
   x = Dense(nclasses)(x)
   # x = Activation("softmax")(x)
@@ -54,12 +55,15 @@ def quantized_cnn(Inputs,nclasses,filters,kernel,strides, pooling, dropout, acti
                 name='conv_%i'%i)(x)
      x = QActivation(activation)(x)
      x = BatchNormalization()(x)
-     x = MaxPooling2D(pool_size = int(p))(x)
+     if float(p) != 0:
+       x = MaxPooling2D(pool_size = (int(p),int(p)) )(x)
      # x = Dropout(float(d))(x)
    x = Flatten()(x)
-   x = QDense(nclasses,
+   x = QDense(128,
               kernel_quantizer = quantizer_dense,
               bias_quantizer   = quantizer_dense)(x)
-   # x = Activation("softmax")(x)
+   x = QActivation(activation)(x)
+   x = BatchNormalization()(x)
+   x = Dense(nclasses)(x)
    model = Model(inputs=[x_in], outputs=[x])
    return model

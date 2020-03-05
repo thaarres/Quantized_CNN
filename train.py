@@ -16,6 +16,7 @@ import tensorflow as tf
 from tensorflow.keras.layers import Input
 from tensorflow.keras.optimizers import SGD, Adam, RMSprop, Adadelta,Nadam 
 from tensorflow.keras.callbacks import Callback, EarlyStopping,History,ModelCheckpoint,TensorBoard,ReduceLROnPlateau,TerminateOnNaN,LearningRateScheduler
+from tensorflow.keras.utils import to_categorical, plot_model
 
 print("Using TensorFlow version: {}".format(tf.__version__))
 print("Using Keras version: {}".format(tf.keras.__version__))
@@ -25,7 +26,7 @@ print("Forcing image data format to {}".format(K.image_data_format()))
 import tensorflow_model_optimization as tfmot
 
 print("Importing helper libraries")
-from tensorflow.keras.utils import to_categorical, plot_model
+
 import h5py
 from sklearn.model_selection import KFold
 from sklearn.model_selection import StratifiedShuffleSplit
@@ -54,14 +55,14 @@ BUFFER_SIZE = 10000 # Use a much larger value for real code.
 NCLASSES    = 10
 
 
-def getCallbacks():
-  earlyStopping = EarlyStopping(monitor='val_loss', patience=3, verbose=1, mode='min')
-  mcp_save_m    = ModelCheckpoint(outdir+'/bestModel.h5', save_best_only=True, monitor='val_loss', mode='min')
-  mcp_save_w    = ModelCheckpoint(outdir+'/bestWeights.h5', save_best_only=True,save_weights_only=True, monitor='val_loss', mode='min')
-  tensorboard   = tf.keras.callbacks.TensorBoard(log_dir='./logs/model1', update_freq='batch')
+def getCallbacks(name='full'):
+  earlyStopping = EarlyStopping(monitor='val_loss', patience=5, verbose=1, mode='auto')
+  mcp_save_m    = ModelCheckpoint(outdir+'/bestModel_%s.h5'  %name, save_best_only=True, monitor='val_loss', mode='auto')
+  mcp_save_w    = ModelCheckpoint(outdir+'/bestWeights_%s.h5'%name, save_best_only=True,save_weights_only=True, monitor='val_loss', mode='auto')
+  tensorboard   = tf.keras.callbacks.TensorBoard(log_dir='./logs/model_%s'%name, update_freq='batch')
   reduce_lr_loss = ReduceLROnPlateau(monitor='val_loss')#, factor=0.1, patience=7, verbose=1, epsilon=1e-4, mode='min')
   
-  return [tensorboard,earlyStopping, mcp_save_m,mcp_save_w,reduce_lr_loss]
+  return [earlyStopping, mcp_save_m,mcp_save_w,reduce_lr_loss]
 
 
 def evaluateModel(yamlConfig, train_data_list, val_data_list, epochs, batch_size, nclasses, input_shape,train_size, outdir):
@@ -87,7 +88,22 @@ def evaluateModel(yamlConfig, train_data_list, val_data_list, epochs, batch_size
   
     model = getModel(yamlConfig, input_shape)
     
-    allCallbacks = getCallbacks()
+    #Add pruned model
+    prune = True
+    if prune == True:
+      pruning_schedule  = tfmot.sparsity.keras.PolynomialDecay( initial_sparsity=0.0, final_sparsity=0.5, begin_step=2000, end_step=4000)
+      model_for_pruning = tfmot.sparsity.keras.prune_low_magnitude(model, pruning_schedule=pruning_schedule)
+      model_for_pruning.compile(loss=LOSS, optimizer=OPTIMIZER, metrics=["accuracy"])
+      model_for_pruning.fit(train_data,
+                            epochs =  epochs, 
+                            validation_data=val_data,
+                            steps_per_epoch=steps_per_epoch,
+                            validation_steps=eval_steps_per_epoch,
+                            callbacks=[tfmot.sparsity.keras.UpdatePruningStep()],
+                            verbose=1)
+                            
+    allCallbacks_full   = getCallbacks(name="full")
+   
     history = model.fit(train_data,
                         epochs =  epochs, 
                         validation_data=val_data,
@@ -100,10 +116,11 @@ def evaluateModel(yamlConfig, train_data_list, val_data_list, epochs, batch_size
     print("Loss {}, Val accuracy {}".format(loss, acc ))  
     print("Loss {}, Val accuracy {}".format(loss, acc ))  
     print("Loss {}, Val accuracy {}".format(loss, acc ))  
+    model.save(outdir+'finalModel_%i.h5'%i, save_format='tf')
     scores.append(acc)
     histories.append(history)
   np.savez(outdir+"/scores", scores)  
-  model.save(outdir+'finalModel.h5', save_format='tf')
+ 
   return scores, histories
   
 

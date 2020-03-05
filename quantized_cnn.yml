@@ -1,0 +1,16 @@
+OutputDir: quantized_cnn
+KerasModel: quantized_cnn
+Filters: 16,16,16 #29/13/5
+Kernel: 3,3,3
+Strides: 1,1,1
+Pooling: 0,4,2
+Dropout: 0.0,0.0,0.0
+Activation: quantized_relu(32,16)
+L1Reg: 0
+Epochs: 100
+Batchsize: 1000
+Folds: 5
+cnn_bits: 1
+cnn_integers: 0
+dense_bits: 1
+dense_integers: 0
