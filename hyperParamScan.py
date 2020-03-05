@@ -174,7 +174,7 @@ def run_model(optmizer_index=0, CNN_filters=10,
     model_evaluation = _model.model_evaluate()
     return model_evaluation
 
-n_epochs = 100
+n_epochs = 500
 
 # Bayesian Optimization
 
