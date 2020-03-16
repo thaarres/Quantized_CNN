@@ -20,6 +20,11 @@ import tensorflow.keras.backend as K
 K.set_image_data_format('channels_last')
 print("Forcing image data format to ".format(K.image_data_format()))
 #import tensorflow_datasets as tfds
+from tensorflow_model_optimization.python.core.sparsity.keras import prune
+from tensorflow_model_optimization.python.core.sparsity.keras import pruning_callbacks
+from tensorflow_model_optimization.python.core.sparsity.keras import pruning_schedule
+from tensorflow_model_optimization.python.core.sparsity.keras import pruning_wrapper
+
 
 print("Importing helper libraries")
 from tensorflow.keras.utils import to_categorical, plot_model
@@ -38,7 +43,7 @@ def parse_config(config_file) :
 
   print("Loading configuration from", config_file)
   config = open(config_file, 'r')
-  return yaml.load(config)
+  return yaml.safe_load(config)
   
 def toJSON(model, outfile_name):
   outfile = open(outfile_name,'w')
@@ -166,26 +171,31 @@ def getKfoldDataset(name="svhn_cropped",extra=False,val_percent=10):
   
   return test_data, train_data, val_data, info
   
-def trainingDiagnostics(histories,outdir,filename='/learning_curve.png'):
-  plt.clf()
-  f, (ax1, ax2) = plt.subplots(2, sharex=True, sharey=False)
-  for i in range(len(histories)):
-    if i == 0:
-      l1, = ax1.plot(histories[i].history['loss']        , marker='o', linestyle='dashed', color='rosybrown',alpha=0.5+i/10)
-      l2, = ax1.plot(histories[i].history['val_loss']    , marker='o', linestyle='dashed', color='orangered',alpha=0.5+i/10)
-    else:
-      ax1.plot(histories[i].history['loss']        , marker='o', linestyle='dashed', color='rosybrown',alpha=0.5+i/10)
-      ax1.plot(histories[i].history['val_loss']    , marker='o', linestyle='dashed', color='orangered',alpha=0.5+i/10)
-    ax2.plot(histories[i].history['accuracy']    , marker='o', linestyle='dashed', color='rosybrown',alpha=0.5+i/10)
-    ax2.plot(histories[i].history['val_accuracy'], marker='o', linestyle='dashed', color='orangered',alpha=0.5+i/10)
-  ax1.set_ylabel("Cross entropy loss")
-  ax2.set_xlabel("Epoch")
-  ax1.text(0.98, 0.98, 'k-Fold cross-validaton , k=%i'%len(histories), verticalalignment='top',horizontalalignment='right',transform=ax1.transAxes,color='slategray', fontsize=8)
-  ax2.set_ylabel("Classification accuracy")
-  #ax1.set_ypreprocess("log", nonposy='clip')
-  #ax2.set_ypreprocess("log", nonposy='clip')
-  plt.legend([l1, l2],["Train (per fold)", "Test (per fold)"])
-  plt.savefig(outdir+filename)
+def trainingDiagnostics(historiesPerFold,outdir,filename='learning_curve.png'):
+  print("len(historiesPerFold[0])",len(historiesPerFold[0]))
+  print("len(historiesPerFold)",len(historiesPerFold))
+  for model in range(len(historiesPerFold[0])):
+      print (model)
+      histories = [historiesPerFold[model][j]for j in range(0,len(historiesPerFold))]
+      plt.clf()
+      f, (ax1, ax2) = plt.subplots(2, sharex=True, sharey=False)
+      for i in range(len(histories)):
+        if i == 0:
+          l1, = ax1.plot(histories[i].history['loss']        , marker='o', linestyle='dashed', color='rosybrown',alpha=0.5+i/10)
+          l2, = ax1.plot(histories[i].history['val_loss']    , marker='o', linestyle='dashed', color='orangered',alpha=0.5+i/10)
+        else:
+          ax1.plot(histories[i].history['loss']        , marker='o', linestyle='dashed', color='rosybrown',alpha=0.5+i/10)
+          ax1.plot(histories[i].history['val_loss']    , marker='o', linestyle='dashed', color='orangered',alpha=0.5+i/10)
+        ax2.plot(histories[i].history['accuracy']    , marker='o', linestyle='dashed', color='rosybrown',alpha=0.5+i/10)
+        ax2.plot(histories[i].history['val_accuracy'], marker='o', linestyle='dashed', color='orangered',alpha=0.5+i/10)
+      ax1.set_ylabel("Cross entropy loss")
+      ax2.set_xlabel("Epoch")
+      ax1.text(0.98, 0.98, 'k-Fold cross-validaton , k=%i'%len(histories), verticalalignment='top',horizontalalignment='right',transform=ax1.transAxes,color='slategray', fontsize=8)
+      ax2.set_ylabel("Classification accuracy")
+      #ax1.set_ypreprocess("log", nonposy='clip')
+      #ax2.set_ypreprocess("log", nonposy='clip')
+      plt.legend([l1, l2],["Train (per fold)", "Test (per fold)"])
+      plt.savefig(outdir+"/model_%s_"%model+filename)
 
 def performanceSummary(scores,labels, outdir,outname='/performance_summary.png'):
 	plt.clf()
@@ -224,4 +234,32 @@ def getCallbacks():
   outputDir=outdir)
   callbacks = callbacks.callbacks
   return callbacks
-        
+
+def print_model_sparsity(pruned_model):
+  """Prints sparsity for the pruned layers in the model.
+  Model Sparsity Summary
+  --
+  prune_lstm_1: (kernel, 0.5), (recurrent_kernel, 0.6)
+  prune_dense_1: (kernel, 0.5)
+  Args:
+    pruned_model: keras model to summarize.
+  Returns:
+    None
+  """
+  def _get_sparsity(weights):
+    return 1.0 - np.count_nonzero(weights) / float(weights.size)
+
+  print("Model Sparsity Summary ({})".format(pruned_model.name))
+  print("--")
+  for layer in pruned_model.layers:
+    if isinstance(layer, pruning_wrapper.PruneLowMagnitude):
+      prunable_weights = layer.layer.get_prunable_weights()
+      if prunable_weights:
+        print("{}: {}".format(
+            layer.name, ", ".join([
+                "({}, {})".format(weight.name,
+                                  str(_get_sparsity(K.get_value(weight))))
+                for weight in prunable_weights
+            ])))
+  print("\n")
+          

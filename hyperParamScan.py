@@ -21,6 +21,7 @@ import numpy as np
 # keras imports
 print("Importing TensorFlow")
 import tensorflow
+import tensorflow as tf
 from tensorflow.keras.datasets import mnist, fashion_mnist
 import matplotlib; matplotlib.use('PDF') 
 from tensorflow.keras.models import Model, Sequential
@@ -63,8 +64,8 @@ def getDatasets(nclasses,doMnist=False,doSvhn=True,greyScale=False,ext=False):
     
     y_train[y_train == 10] = 0
     y_test[y_test == 10] = 0
-    y_train = to_categorical(y_train, nclasses)
-    y_test  = to_categorical(y_test , nclasses)
+    # y_train = to_categorical(y_train, nclasses)
+    # y_test  = to_categorical(y_test , nclasses)
     
     if greyScale:
       x_train = rgb2gray(x_train).astype(np.float32)
@@ -98,7 +99,7 @@ class myModel():
         # here an epoch is a single file
         self.epochs = epochs
         X_train, X_test, Y_train, Y_test  = getDatasets(nclasses=10,doMnist=False,doSvhn=True)
-        self.nclasses    = Y_train.shape[1]
+        self.nclasses    = 10
         self.input_shape = X_train.shape[1:]
         self.__y_test  = Y_test
         self.__y_train = Y_train
@@ -140,7 +141,7 @@ class myModel():
         model = Model(inputs=inputImage, outputs=output)
         model.summary()
         model.compile(optimizer=self.optimizer[self.optimizer_index], 
-                      loss='categorical_crossentropy', metrics=['acc'])
+                      loss=tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True), metrics=['accuracy'])
         return model
 
     
@@ -174,14 +175,14 @@ def run_model(optmizer_index=0, CNN_filters=10,
     model_evaluation = _model.model_evaluate()
     return model_evaluation
 
-n_epochs = 500
+n_epochs = 100
 
 # Bayesian Optimization
 
 # the bounds dict should be in order of continuous type and then discrete type
 bounds = [{'name': 'optmizer_index',        'type': 'discrete',   'domain': (0, 1, 2)},
-          {'name': 'CNN_filters',           'type': 'discrete',   'domain': (8, 16, 32)},
-          {'name': 'CNN_filter_size',       'type': 'discrete',   'domain': (2, 3)},
+          {'name': 'CNN_filters',           'type': 'discrete',   'domain': (8, 16, 32,64)},
+          {'name': 'CNN_filter_size',       'type': 'discrete',   'domain': (3, 3)},
           {'name': 'CNN_MaxPool_size',      'type': 'discrete',   'domain': (1, 2, 3)},
           {'name': 'CNN_layers',            'type': 'discrete',   'domain': (1, 2, 3)},
           {'name': 'CNN_activation_index',  'type': 'discrete',   'domain': (0, 1)},

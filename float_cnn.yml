@@ -8,4 +8,4 @@ Dropout: 0.0,0.0,0.0
 Activation: relu
 L1Reg: 0
 Epochs: 100
-Batchsize: 500
+Batchsize: 1000
