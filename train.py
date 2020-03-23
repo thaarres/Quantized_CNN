@@ -11,6 +11,8 @@ print("Set TF logging level to minimum (INFO and WARNING messages are not printe
 import os
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3' 
 import tempfile
+import json
+import pandas as pd
 
 print("Importing TensorFlow")
 import tensorflow as tf
@@ -46,43 +48,26 @@ print("Importing private libraries")
 import models
 from utils import getDatasets,getKfoldDataset, toJSON, parse_config, trainingDiagnostics, performanceSummary,preprocess,print_model_sparsity
 
-print("Spread jobs over multiple GPUs")
-gpus = tf.config.experimental.list_physical_devices('GPU')
-if gpus:
-  # Create multiple virtual GPUs with 1GB memory each on each listed GPU
-  try:
-    for gpu in gpus:
-      tf.config.experimental.set_virtual_device_configuration(gpu,
-                                                              [tf.config.experimental.VirtualDeviceConfiguration(memory_limit=1024),
-                                                               tf.config.experimental.VirtualDeviceConfiguration(memory_limit=1024)])
-    logical_gpus = tf.config.experimental.list_logical_devices('GPU')
-    print(len(gpus), "Physical GPU,", len(logical_gpus), "Logical GPUs")
-  except RuntimeError as e:
-    print(e)
-strategy = tf.distribute.MirroredStrategy(cross_device_ops=tf.distribute.HierarchicalCopyAllReduce())
-
-OPTIMIZER   = Adam(lr=0.0001, decay=0.000025)
-LOSS        = tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True)
-BUFFER_SIZE = 1024 
-NCLASSES    = 10
 
 
-def getCallbacks():
-  if os.path.exists(outdir+'/logs/'):
-    os.system('rm -rf '+outdir+'/logs/')
-  earlyStopping = EarlyStopping(monitor='val_loss', patience=5, verbose=1, mode='auto')
-  mcp_save_m    = ModelCheckpoint(outdir+'/bestModel.h5', save_best_only=True, monitor='val_loss', mode='auto')
-  mcp_save_w    = ModelCheckpoint(outdir+'/bestWeights.h5', save_best_only=True,save_weights_only=True, monitor='val_loss', mode='auto')
-  tensorboard   = tf.keras.callbacks.TensorBoard(log_dir=outdir+'/logs/', update_freq='batch')
-  reduce_lr_loss = ReduceLROnPlateau(monitor='val_loss')#, factor=0.1, patience=7, verbose=1, epsilon=1e-4, mode='min')
+
+def getCallbacks(outdir_):
+  # if os.path.exists(outdir+'/logs/'):
+  #   os.system('rm -rf '+outdir+'/logs/')
+  earlyStopping = EarlyStopping(monitor='val_loss', patience=7, verbose=1, mode='auto')
+  mcp_save_m    = ModelCheckpoint(outdir_+'/bestModel.h5', save_best_only=True, monitor='val_loss', mode='auto')
+  mcp_save_w    = ModelCheckpoint(outdir_+'/bestWeights.h5', save_best_only=True,save_weights_only=True, monitor='val_loss', mode='auto')
+  # tensorboard   = tf.keras.callbacks.TensorBoard(log_dir=outdir+'/logs/', update_freq='batch')
+  reduce_lr_loss = ReduceLROnPlateau(monitor='val_loss', factor=0.1, patience=7, verbose=1, epsilon=1e-4, mode='auto')
   
-  return [tensorboard,earlyStopping, mcp_save_m,mcp_save_w,reduce_lr_loss]
+  return [earlyStopping, mcp_save_m,mcp_save_w,reduce_lr_loss]
 
-def buildAndTrain(yamlConfig, input_shape, train_data, val_data,steps_per_epoch,eval_steps_per_epoch,outdir,prune=True):
+def buildAndTrain(fold,yamlConfig, input_shape, train_data, val_data,steps_per_epoch,eval_steps_per_epoch,outdir,prune=True):
   
   #Get full model  
   model      = getModel(yamlConfig['KerasModel'],yamlConfig, input_shape)
-  model._name = "full"
+  model._name = "full_%i"%fold
+  if not os.path.exists(outdir+'/%s/'%model.name): os.system('mkdir '+outdir+'/%s/'%model.name)
 
   #Get pruned models
   prune = True
@@ -90,27 +75,34 @@ def buildAndTrain(yamlConfig, input_shape, train_data, val_data,steps_per_epoch,
      #Prune dense layers only
      pruning_schedule            = tfmot.sparsity.keras.PolynomialDecay( initial_sparsity=0.0, final_sparsity=0.5, begin_step=2000, end_step=4000)
      model_for_layerwise_pruning = getModel("float_cnn_densePrune"  ,yamlConfig, input_shape) 
-     model_for_layerwise_pruning._name  = "layerwise_pruning"
+     model_for_layerwise_pruning._name  = "layerwise_pruning_%i"%fold
+     if not os.path.exists(outdir+'/%s/'%model_for_layerwise_pruning.name): os.system('mkdir '+outdir+'/%s/'%model_for_layerwise_pruning.name)
+     
    
      #Prune full model
      model_for_full_pruning      = tfmot.sparsity.keras.prune_low_magnitude(model, pruning_schedule=pruning_schedule)
-     model_for_full_pruning._name  = "full_pruning"
-
+     model_for_full_pruning._name  = "full_pruning_%i"%fold
+     if not os.path.exists(outdir+'/%s/'%model_for_full_pruning.name): os.system('mkdir '+outdir+'/%s/'%model_for_full_pruning.name)
+     
      models = [model, model_for_layerwise_pruning, model_for_full_pruning]
   else:
     models = [model]
     
   histories, scores = list (), list ()
-  for model in models:
+  for i,model in enumerate(models):
     print("Training model: {} ".format(model.name))
     model.summary()
-    callbacks = getCallbacks()
+    callbacks = getCallbacks(outdir+'/%s/'%model.name)
     if model.name.find("pruning")!=-1:
       print("Model sparsity: {} ".format(model.name))
       print_model_sparsity(model)
-      callbacks = [ pruning_callbacks.UpdatePruningStep(), pruning_callbacks.PruningSummaries(log_dir=outdir+'/logs_%s/'%model.name, profile_batch=0)]
+      callbacks = [ pruning_callbacks.UpdatePruningStep(), 
+                    EarlyStopping(monitor='val_loss', patience=7, verbose=1, mode='auto'),
+                    #pruning_callbacks.PruningSummaries(log_dir=outdir+'/logs_%s/'%model.name),
+                    ModelCheckpoint(outdir+'/%s/bestModel.h5'%model.name, save_best_only=True, monitor='val_loss', mode='auto'),
+                    ModelCheckpoint(outdir+'/%s/bestWeights.h5'%model.name, save_best_only=True,save_weights_only=True, monitor='val_loss', mode='auto')]
     print("Start training loop:\n\n")
-    toJSON(model,outdir + '/model_%s.json'%model.name)
+    toJSON(model,outdir + '/%s/model.json'%model.name)
     model.compile(loss=LOSS, optimizer=OPTIMIZER, metrics=["accuracy"])
               
     history = model.fit(train_data,
@@ -120,12 +112,18 @@ def buildAndTrain(yamlConfig, input_shape, train_data, val_data,steps_per_epoch,
                         validation_steps=eval_steps_per_epoch,
                         callbacks=callbacks,
                         verbose=1)                    
-
+    model.save(outdir+'/%s/saved_model.h5'%(model.name))
+    history_dict = history.history
+    # Save it under the form of a json file
+    pd.DataFrame.from_dict(history.history).to_csv(outdir+'/%s/history_dict.csv'%model.name,index=False)
+    # json.dump(history_dict, open(outdir+'/%s/history_dict'%model.name, 'w'))
     val_score = model.evaluate(val_data)
     print('\n Test loss:', val_score[0])
     print('\n Test accuracy:', val_score[1])
     histories.append(history)
     scores.append(val_score)
+    np.savez(outdir+'/%s/scores'%model.name, val_score)  
+    del model
   return histories, scores
     
     
@@ -135,7 +133,6 @@ def trainModel(yamlConfig, train_data_list, val_data_list, epochs, batch_size, n
 
   scores_, histories_ = list(), list() 
   for i,(val_,train_) in enumerate(zip(val_data_list, train_data_list)): 
-    if i>3: break
     print("Working on fold: {}".format(i))
     train_data = train_.map(preprocess).shuffle(BUFFER_SIZE).batch(batch_size).repeat()
     val_data   = val_ .map(preprocess).batch(batch_size)
@@ -149,16 +146,18 @@ def trainModel(yamlConfig, train_data_list, val_data_list, epochs, batch_size, n
     steps_per_epoch      = int(train_size*0.9)  // batch_size #90% train, 10% validation in 10-fold xval
     eval_steps_per_epoch = int(train_size*0.1) // batch_size
     
-    #
-    # train_data = train_data.take(5000)
-    # val_data   = val_data.take(2000)
+    
+    # steps_per_epoch      = 60000// batch_size
+    # eval_steps_per_epoch = 10000// batch_size
+    # train_data = train_data.take(60000)
+    # val_data   = val_data.take(10000)
     
     with strategy.scope():
-      histories,scores = buildAndTrain(yamlConfig, input_shape, train_data, val_data,steps_per_epoch,eval_steps_per_epoch,outdir,prune=True)
+      histories,scores = buildAndTrain(i,yamlConfig, input_shape, train_data, val_data,steps_per_epoch,eval_steps_per_epoch,outdir,prune=True)
       scores_.append(scores)
       histories_.append(histories)
       
-  np.savez(outdir+"/scores", scores)  
+  # np.savez(outdir+"/scores", scores)
  
   return scores_, histories_
   
@@ -202,12 +201,36 @@ def getModel(modelName, yamlConfig,input_shape):
 
 
 if __name__ == "__main__":
+  
   parser = OptionParser()
   parser.add_option('-o','--outdir'   ,action='store',type='string',dest='outdir'   ,default='', help='yaml config file')
   parser.add_option('-c','--config'   ,action='store',type='string',dest='config'   ,default='float_cnn.yml', help='yaml config file')
   parser.add_option('-s','--svhn',action='store_true', dest='svhn', default=True, help='Use SVHN')
   parser.add_option('--mnist',action='store_true', dest='mnist', default=False, help='Use MNIST')
   (options,args) = parser.parse_args()
+  
+  print("Spread jobs over multiple GPUs")
+  gpus = tf.config.experimental.list_physical_devices('GPU')
+  if gpus:
+    # Create multiple virtual GPUs with 1GB memory each on each listed GPU
+    try:
+      for gpu in gpus:
+        tf.config.experimental.set_virtual_device_configuration(gpu,
+                                                                [tf.config.experimental.VirtualDeviceConfiguration(memory_limit=1024),
+                                                                 tf.config.experimental.VirtualDeviceConfiguration(memory_limit=1024)])
+      logical_gpus = tf.config.experimental.list_logical_devices('GPU')
+      print(len(gpus), "Physical GPU,", len(logical_gpus), "Logical GPUs")
+    except RuntimeError as e:
+      print(e)
+  strategy = tf.distribute.MirroredStrategy(cross_device_ops=tf.distribute.HierarchicalCopyAllReduce())
+  # strategy = tf.distribute.MirroredStrategy(devices=["/gpu:1", "/gpu:2"])
+
+
+  OPTIMIZER   = Adam(lr=0.01, decay=0.000025)
+  LOSS        = tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True)
+  BUFFER_SIZE = 1024 
+  NCLASSES    = 10
+  
 
   yamlConfig = parse_config(options.config)
   if not options.outdir:
@@ -219,7 +242,7 @@ if __name__ == "__main__":
   else: input("Warning: output directory exists. Press Enter to continue...")
 
   epochs    = yamlConfig['Epochs']
-  batchsize = yamlConfig['Batchsize'] 
+  batchsize = yamlConfig['Batchsize']*strategy.num_replicas_in_sync 
 
 
   extra = True
@@ -232,10 +255,6 @@ if __name__ == "__main__":
     train_size = info.splits['train'].num_examples
     
   print("Using {}-fold training and validation data".format(len(train_data_list)))
-  print("Evaluating model")
+  print("Training model")
   scores, histories = trainModel(yamlConfig, train_data_list, val_data_list, epochs, batchsize, nclasses, input_shape,train_size, outdir)
-
-  print("Plotting loss and accuracy")
-  trainingDiagnostics(histories,outdir)
-  # print("Accuracy mean and spread")
-  # performanceSummary(scores,outdir)
+  print("Done!")
