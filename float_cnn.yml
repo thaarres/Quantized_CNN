@@ -1,11 +1,11 @@
 OutputDir: float_cnn
 KerasModel: float_cnn
-Filters: 16,16,16 #29/13/5
+Filters: 16,16,16
 Kernel: 3,3,3
 Strides: 1,1,1
-Pooling: 0,4,2
+Pooling: 0,3,3
 Dropout: 0.0,0.0,0.0
 Activation: relu
 L1Reg: 0
 Epochs: 100
-Batchsize: 1000
+Batchsize: 1024

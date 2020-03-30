@@ -13,6 +13,9 @@ os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 import tempfile
 import json
 import pandas as pd
+import time
+
+
 
 print("Importing TensorFlow")
 import tensorflow as tf
@@ -54,11 +57,11 @@ from utils import getDatasets,getKfoldDataset, toJSON, parse_config, trainingDia
 def getCallbacks(outdir_):
   # if os.path.exists(outdir+'/logs/'):
   #   os.system('rm -rf '+outdir+'/logs/')
-  earlyStopping = EarlyStopping(monitor='val_loss', patience=7, verbose=1, mode='auto')
+  earlyStopping = EarlyStopping(monitor='val_loss', patience=10, verbose=1, mode='auto')
   mcp_save_m    = ModelCheckpoint(outdir_+'/bestModel.h5', save_best_only=True, monitor='val_loss', mode='auto')
   mcp_save_w    = ModelCheckpoint(outdir_+'/bestWeights.h5', save_best_only=True,save_weights_only=True, monitor='val_loss', mode='auto')
   # tensorboard   = tf.keras.callbacks.TensorBoard(log_dir=outdir+'/logs/', update_freq='batch')
-  reduce_lr_loss = ReduceLROnPlateau(monitor='val_loss', factor=0.1, patience=7, verbose=1, epsilon=1e-4, mode='auto')
+  reduce_lr_loss = ReduceLROnPlateau(monitor='val_loss', factor=0.1, patience=7, verbose=1, min_delta=1e-4, mode='auto')
   
   return [earlyStopping, mcp_save_m,mcp_save_w,reduce_lr_loss]
 
@@ -71,16 +74,19 @@ def buildAndTrain(fold,yamlConfig, input_shape, train_data, val_data,steps_per_e
 
   #Get pruned models
   prune = True
+  if yamlConfig['KerasModel'].find('quantized')!=-1: 
+    prune = False
   if prune == True:
      #Prune dense layers only
      pruning_schedule            = tfmot.sparsity.keras.PolynomialDecay( initial_sparsity=0.0, final_sparsity=0.5, begin_step=2000, end_step=4000)
+     
      model_for_layerwise_pruning = getModel("float_cnn_densePrune"  ,yamlConfig, input_shape) 
      model_for_layerwise_pruning._name  = "layerwise_pruning_%i"%fold
      if not os.path.exists(outdir+'/%s/'%model_for_layerwise_pruning.name): os.system('mkdir '+outdir+'/%s/'%model_for_layerwise_pruning.name)
      
    
      #Prune full model
-     model_for_full_pruning      = tfmot.sparsity.keras.prune_low_magnitude(model, pruning_schedule=pruning_schedule)
+     model_for_full_pruning      = getModel("float_cnn_allPrune"  ,yamlConfig, input_shape) 
      model_for_full_pruning._name  = "full_pruning_%i"%fold
      if not os.path.exists(outdir+'/%s/'%model_for_full_pruning.name): os.system('mkdir '+outdir+'/%s/'%model_for_full_pruning.name)
      
@@ -89,8 +95,9 @@ def buildAndTrain(fold,yamlConfig, input_shape, train_data, val_data,steps_per_e
     models = [model]
     
   histories, scores = list (), list ()
+  start = time.time()
   for i,model in enumerate(models):
-    print("Training model: {} ".format(model.name))
+    print("\nTraining model: {} ".format(model.name))
     model.summary()
     callbacks = getCallbacks(outdir+'/%s/'%model.name)
     if model.name.find("pruning")!=-1:
@@ -124,6 +131,9 @@ def buildAndTrain(fold,yamlConfig, input_shape, train_data, val_data,steps_per_e
     scores.append(val_score)
     np.savez(outdir+'/%s/scores'%model.name, val_score)  
     del model
+    end = time.time()
+    print('It took {} minutes to train model!\n'.format( (end - start)/60.))
+    
   return histories, scores
     
     
@@ -133,6 +143,7 @@ def trainModel(yamlConfig, train_data_list, val_data_list, epochs, batch_size, n
 
   scores_, histories_ = list(), list() 
   for i,(val_,train_) in enumerate(zip(val_data_list, train_data_list)): 
+    #if i>0: break
     print("Working on fold: {}".format(i))
     train_data = train_.map(preprocess).shuffle(BUFFER_SIZE).batch(batch_size).repeat()
     val_data   = val_ .map(preprocess).batch(batch_size)
@@ -226,10 +237,6 @@ if __name__ == "__main__":
   # strategy = tf.distribute.MirroredStrategy(devices=["/gpu:1", "/gpu:2"])
 
 
-  OPTIMIZER   = Adam(lr=0.01, decay=0.000025)
-  LOSS        = tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True)
-  BUFFER_SIZE = 1024 
-  NCLASSES    = 10
   
 
   yamlConfig = parse_config(options.config)
@@ -243,9 +250,15 @@ if __name__ == "__main__":
 
   epochs    = yamlConfig['Epochs']
   batchsize = yamlConfig['Batchsize']*strategy.num_replicas_in_sync 
+  
+  OPTIMIZER   = Adam()
+  LOSS        = tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True)
+  BUFFER_SIZE = 10*batchsize
+  NCLASSES    = 10
+  
 
 
-  extra = True
+  extra = True #Use full training set
   test_data_list, train_data_list, val_data_list, info = getKfoldDataset(name="svhn_cropped",extra=extra) # Val data = 30220, Train data = 574168 , Test data = 26032
   nclasses    = info.features['label'].num_classes
   input_shape = info.features['image'].shape 

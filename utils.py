@@ -164,11 +164,11 @@ def getKfoldDataset(name="svhn_cropped",extra=False,val_percent=10):
   # test_data = tfds.load(name, split=[f'test[:{k}%]+test[{k+20}%:]+test[:{k}%]+test[{k+20}%:]'for k in range(0, 100, 20)], as_supervised=True)
   test_data = tfds.load(name, split='test', as_supervised=True)
   if extra:
-      val_data         = tfds.load(name, split=[f'train[{k}%:{k+10}%]+extra[{k}%:{k+10}%]'for k in range(0, 100, 10)], with_info=False, as_supervised=True)
-      train_data, info = tfds.load(name, split=[f'train[:{k}%]+train[{k+10}%:]+extra[:{k}%]+extra[{k+10}%:]'for k in range(0, 100, 10)], with_info=True, as_supervised=True)
+      val_data         = tfds.load(name, split=[f'train[{k}%:{k+10}%]+extra[{k}%:{k+10}%]'for k in range(0, 100, 10)], with_info=False, as_supervised=True,shuffle_files=True)
+      train_data, info = tfds.load(name, split=[f'train[:{k}%]+train[{k+10}%:]+extra[:{k}%]+extra[{k+10}%:]'for k in range(0, 100, 10)], with_info=True, as_supervised=True,shuffle_files=True)
   else:                           
-    val_data         = tfds.load(name, split=[f'train[{k}%:{k+10}%]'for k in range(0, 100, 10)], with_info=False, as_supervised=True)
-    train_data, info = tfds.load(name, split=[f'train[:{k}%]+train[{k+10}%:]'for k in range(0, 100, 10)], with_info=True, as_supervised=True) 
+    val_data         = tfds.load(name, split=[f'train[{k}%:{k+10}%]'for k in range(0, 100, 10)], with_info=False, as_supervised=True,shuffle_files=True)
+    train_data, info = tfds.load(name, split=[f'train[:{k}%]+train[{k+10}%:]'for k in range(0, 100, 10)], with_info=True, as_supervised=True,shuffle_files=True) 
   
   return test_data, train_data, val_data, info
   
