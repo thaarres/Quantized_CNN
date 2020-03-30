@@ -115,8 +115,8 @@ def getDatasets(nclasses,doMnist=False,doSvhn=False,greyScale=False,ext=False):
     
     y_train[y_train == 10] = 0
     y_test[y_test == 10] = 0
-    y_train = to_categorical(y_train, nclasses)
-    y_test  = to_categorical(y_test , nclasses)
+    # y_train = to_categorical(y_train, nclasses)
+    # y_test  = to_categorical(y_test , nclasses)
     
     if greyScale:
       x_train = rgb2gray(x_train).astype(np.float32)
@@ -147,8 +147,8 @@ def getDatasets(nclasses,doMnist=False,doSvhn=False,greyScale=False,ext=False):
 
     print(y_train[0:10])
 
-    y_train = to_categorical(y_train, nclasses)
-    y_test  = to_categorical(y_test, nclasses)
+    # y_train = to_categorical(y_train, nclasses)
+    # y_test  = to_categorical(y_test, nclasses)
   
   return x_train,x_test,y_train,y_test
 
@@ -161,7 +161,8 @@ def getKfoldDataset(name="svhn_cropped",extra=False,val_percent=10):
   # Construct a tf.data.Dataset
   # dataset, info  = tfds.load(name=name, with_info=True, as_supervised=True)
   # train_, test_, extra_ = dataset['train'], dataset['test'], dataset['extra']
-  test_data = tfds.load(name, split=[f'test[:{k}%]+test[{k+20}%:]+test[:{k}%]+test[{k+20}%:]'for k in range(0, 100, 20)], as_supervised=True)
+  # test_data = tfds.load(name, split=[f'test[:{k}%]+test[{k+20}%:]+test[:{k}%]+test[{k+20}%:]'for k in range(0, 100, 20)], as_supervised=True)
+  test_data = tfds.load(name, split='test', as_supervised=True)
   if extra:
       val_data         = tfds.load(name, split=[f'train[{k}%:{k+10}%]+extra[{k}%:{k+10}%]'for k in range(0, 100, 10)], with_info=False, as_supervised=True)
       train_data, info = tfds.load(name, split=[f'train[:{k}%]+train[{k+10}%:]+extra[:{k}%]+extra[{k+10}%:]'for k in range(0, 100, 10)], with_info=True, as_supervised=True)
@@ -172,43 +173,39 @@ def getKfoldDataset(name="svhn_cropped",extra=False,val_percent=10):
   return test_data, train_data, val_data, info
   
 def trainingDiagnostics(historiesPerFold,outdir,filename='learning_curve.png'):
-  print("len(historiesPerFold[0])",len(historiesPerFold[0]))
-  print("len(historiesPerFold)",len(historiesPerFold))
-  for model in range(len(historiesPerFold[0])):
-      print (model)
-      histories = [historiesPerFold[model][j]for j in range(0,len(historiesPerFold))]
-      plt.clf()
-      f, (ax1, ax2) = plt.subplots(2, sharex=True, sharey=False)
-      for i in range(len(histories)):
-        if i == 0:
-          l1, = ax1.plot(histories[i].history['loss']        , marker='o', linestyle='dashed', color='rosybrown',alpha=0.5+i/10)
-          l2, = ax1.plot(histories[i].history['val_loss']    , marker='o', linestyle='dashed', color='orangered',alpha=0.5+i/10)
-        else:
-          ax1.plot(histories[i].history['loss']        , marker='o', linestyle='dashed', color='rosybrown',alpha=0.5+i/10)
-          ax1.plot(histories[i].history['val_loss']    , marker='o', linestyle='dashed', color='orangered',alpha=0.5+i/10)
-        ax2.plot(histories[i].history['accuracy']    , marker='o', linestyle='dashed', color='rosybrown',alpha=0.5+i/10)
-        ax2.plot(histories[i].history['val_accuracy'], marker='o', linestyle='dashed', color='orangered',alpha=0.5+i/10)
-      ax1.set_ylabel("Cross entropy loss")
-      ax2.set_xlabel("Epoch")
-      ax1.text(0.98, 0.98, 'k-Fold cross-validaton , k=%i'%len(histories), verticalalignment='top',horizontalalignment='right',transform=ax1.transAxes,color='slategray', fontsize=8)
-      ax2.set_ylabel("Classification accuracy")
-      #ax1.set_ypreprocess("log", nonposy='clip')
-      #ax2.set_ypreprocess("log", nonposy='clip')
-      plt.legend([l1, l2],["Train (per fold)", "Test (per fold)"])
-      plt.savefig(outdir+"/model_%s_"%model+filename)
+  for i,model in enumerate(historiesPerFold):
+    plt.clf()
+    f, (ax1, ax2) = plt.subplots(2, sharex=True, sharey=False)
+    if i == 0:
+      l1, = ax1.plot(model['loss']        , marker='o', linestyle='dashed', color='rosybrown',alpha=0.5+i/10)
+      l2, = ax1.plot(model['val_loss']    , marker='o', linestyle='dashed', color='orangered',alpha=0.5+i/10)
+    else:
+      ax1.plot(model['loss']        , marker='o', linestyle='dashed', color='rosybrown',alpha=0.5+i/10)
+      ax1.plot(model['val_loss']    , marker='o', linestyle='dashed', color='orangered',alpha=0.5+i/10)
+    ax2.plot(model['accuracy']    , marker='o', linestyle='dashed', color='rosybrown',alpha=0.5+i/10)
+    ax2.plot(model['val_accuracy'], marker='o', linestyle='dashed', color='orangered',alpha=0.5+i/10)
+  ax1.set_ylabel("Sparse Cross entropy loss")
+  ax2.set_xlabel("Epoch")
+  ax1.text(0.98, 0.98, 'k-Fold cross-validaton , k=%i'%len(historiesPerFold), verticalalignment='top',horizontalalignment='right',transform=ax1.transAxes,color='slategray', fontsize=8)
+  ax2.set_ylabel("Classification accuracy")
+  #ax1.set_ypreprocess("log", nonposy='clip')
+  #ax2.set_ypreprocess("log", nonposy='clip')
+  plt.legend([l1, l2],["Train (per fold)", "Test (per fold)"])
+  plt.savefig(outdir+"/"+filename)
 
 def performanceSummary(scores,labels, outdir,outname='/performance_summary.png'):
-	plt.clf()
-	fig, ax = plt.subplots()
-	#boxes = []
-	bp1 = ax.boxplot(scores[0], positions=[1], notch=False, widths=0.35, 
-	                 patch_artist=True, boxprops=dict(facecolor="C0"))
-	bp2 = ax.boxplot(scores[1], positions=[2], notch=False, widths=0.35, 
-	                 patch_artist=True, boxprops=dict(facecolor="C2"))
+  plt.clf()
+  fig, ax = plt.subplots()
+  colors = ["C0","C2","C3"]
+  # boxes = list()
+  for i, model in enumerate(scores):
+    bp1 = ax.boxplot(model, positions=[i], notch=False, widths=0.35, patch_artist=True, boxprops=dict(facecolor=colors[i]))
+    # boxes.append(bp1)
 	
-	ax.legend([bp1["boxes"][0], bp2["boxes"][0]], [labels[0], labels[1]], loc='upper right')
+  # bps = [ b['boxes'][0] for b in boxes ]
+  # ax.legend(boxes, [labels], loc='upper right')
 	
-	ax.set_xlim(0,6)
+  # ax.set_xlim(0,6)
 	
 	# for i,(score,label) in enumerate(zip(scores,labels)):
 #     boxes.append = ( ax.boxplot(score, bootstrap=1000, notch=True, patch_artist=True, boxprops=dict(facecolor="rosybrown"),medianprops=dict(color="orangered"),showfliers=False,positions=[i],widths=0.5),label=)
@@ -216,13 +213,13 @@ def performanceSummary(scores,labels, outdir,outname='/performance_summary.png')
 #   ax.legend([boxes['boxes'][0]], [labels], loc='upper right')
 #   ax.text(0.98, 0.98, 'k-Fold cross-validaton , k=%i'%len(scores), verticalalignment='top',horizontalalignment='right',transform=ax.transAxes,color='slategray', fontsize=8)
 #
-	plt.ylabel("Accuracy")
-	labels_ = [item.get_text() for item in ax.get_xticklabels()]
-	lab = ['<32,16>','<1,0>']
-	for i in range(0,len(labels)):
-	  labels_[i] = lab[i]
-	ax.set_xticklabels(labels_)
-	plt.savefig(outdir+outname)
+  plt.ylabel("Accuracy")
+  labels_ = [item.get_text() for item in ax.get_xticklabels()]
+  lab = ['<32,16>','<1,0>']
+  for i in range(0,len(labels)):
+    labels_[i] = labels[i]
+  ax.set_xticklabels(labels_)
+  plt.savefig(outdir+outname)
 
 def getCallbacks():
   callbacks=all_callbacks(stop_patience=1000,
