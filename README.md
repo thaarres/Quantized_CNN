@@ -18,20 +18,24 @@ cd ../
 
 ## Training
 
-To train choose one of the provided *.yaml config files or create a new one. Specific architecture (see models.py), number of filters,kernel size, strides, loss function, L1 regularization can be defined in the config.
+To train, flags are set using absl.flags (https://abseil.io/docs/python/guides/flags). Two flagfiles are provided: float_cnn.cfg and quantized_cnn.cfg  choose one of the provided *.yaml config files or create a new one. Specific architecture (see models.py), number of filters,kernel size, strides, loss function etc. can be set in flagfile or command line
 
 To train use the command:
 
 ```
-python3 train.py -c quantized_cnn.yml
+python3 train.py --flagfile=float_cnn.cfg --prune=True
 ```
 
-W.I.P: To evaluate performance:
+Training diagnositics (using N folds)
 
 ```
-python3 compare_models.py -c quantized_cnn/
-```
+python3 trainingDiagnostics.py -m "float_cnn/full;float_cnn/layerwise_pruning;float_cnn/full_pruning_" --names "Float;Pruned dense;Pruned all" --kfolds 10
 
+```
+Plot weights, profile weights and plot ROC
+```
+python3 compare_models.py -f float_cnn/ -m full
+```
 
 ## Hyperparameter scan (Bayesian Optimisation)
 
