@@ -5,48 +5,27 @@ import numpy as np
 from sklearn import metrics
 print("Importing TensorFlow")
 import tensorflow as tf
-tf.debugging.set_log_device_placement(False)
-from tensorflow.keras.layers import Input
-from tensorflow.keras.optimizers import SGD, Adam, RMSprop, Adadelta,Nadam 
-from tensorflow.keras.callbacks import Callback, EarlyStopping,History,ModelCheckpoint,TensorBoard,ReduceLROnPlateau,TerminateOnNaN,LearningRateScheduler
-from tensorflow.keras.utils import to_categorical, plot_model
 
-print("Using TensorFlow version: {}".format(tf.__version__))
-print("Using Keras version: {}".format(tf.keras.__version__))
 import tensorflow.keras.backend as K
 K.set_image_data_format('channels_last')
 
-
 print("Importing helper libraries")
+import seaborn as sns
 
 import h5py
-#from sklearn.model_selection import KFold,StratifiedShuffleSplit #Switch to tf.data
 import matplotlib.pyplot as plt
-from scipy.io import loadmat
-from qkeras import quantized_bits
+from hls4ml.model.profiling import numerical
 print("Importing private libraries")
 import models
-from utils import getDatasets,getKfoldDataset, toJSON, parse_config, trainingDiagnostics, performanceSummary,preprocess,print_model_sparsity
-import tensorflow_model_optimization as tfmot
-from tensorflow_model_optimization.python.core.sparsity.keras import prune
-# from tensorflow_model_optimization.python.core.sparsity.keras import pruning_callbacks
-# from tensorflow_model_optimization.python.core.sparsity.keras import pruning_schedule
+from utils import getDatasets,getKfoldDataset, toJSON, parse_config, trainingDiagnostics, performanceSummary,preprocess,print_model_sparsity,add_logo
 from tensorflow_model_optimization.python.core.sparsity.keras import pruning_wrapper
-# from tensorflow_model_optimization.python.core.sparsity.keras import prune_low_magnitude
-# ConstantSparsity = pruning_schedule.ConstantSparsity
 
-
-
-OPTIMIZER   = Adam(lr=0.01, decay=0.000025)
-LOSS        = tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True)
-BUFFER_SIZE = 1024 
-NCLASSES    = 10
   
 import matplotlib.pyplot as plt
 if __name__ == "__main__":
   parser = OptionParser()
-  parser.add_option('-f','--folders',action='store',type='string',dest='folders',default='float_cnn_v1/', help='in folders')
-  parser.add_option('-m','--models' ,action='store',type='string',dest='models' ,default='full', help='model')
+  parser.add_option('-f','--folders',action='store',type='string',dest='folders',default='float_cnn/', help='in folders')
+  parser.add_option('-m','--models' ,action='store',type='string',dest='models' ,default='full_0', help='model')
   parser.add_option('-s','--svhn',action='store_true', dest='svhn', default=True, help='Use SVHN')
   parser.add_option('--mnist',action='store_true', dest='mnist', default=False, help='Use MNIST')
   parser.add_option('-p','--predict',action='store', type='int', dest='predict', default=1, help='Which MNIST number to predict')
@@ -73,51 +52,56 @@ if __name__ == "__main__":
         if name.find(m)!=-1:
           fullname = (os.path.join(root, name))
           model_name = fullname.split('/')[-1]
-          # model_file = f+'/model.json'
-        #   with open(model_file) as json_file:
-        #       json_config = json_file.read()
-        #
           model = tf.keras.models.load_model(fullname+"/saved_model.h5",custom_objects={'PruneLowMagnitude': pruning_wrapper.PruneLowMagnitude})
-          # model = model_from_json(json_config, custom_objects={
-     #                         'PruneLowMagnitude': prune.prune_low_magnitude(),
-     #                         'QDense': QDense,
-     #                         'QConv2D': QConv2D,
-     #                         'QActivation': QActivation,
-     #                         'QBatchNormalization': QBatchNormalization})
-     #      model.load_weights(f+'/bestWeights.h5')
-          #loop over each layer and get weights and biases'
-          # plt.figure()
- #          if options.doProfile:
- #            numerical(keras_model=model, X=X_test)
- #          plt.savefig(f+'profile.png')
+
+          if options.doProfile:
+            plt.figure()
+            wp, ap = numerical(keras_model=model, X=X_test[:1000])
+            # plt.show()
+            wp.savefig('%s_profile_weights.png'%m)
+            ap.savefig('%s_profile_activations.png'%m)
+
           if options.doWeights:
-              allWeightsByLayer = {}
-              for layer in model.layers:
-                  print ("----")
-                  print (layer._name)
-                  if len(layer.get_weights())<1: continue
-                  weights = layer.get_weights()[0]
-                  weightsByLayer = []
-                  for w in weights:
-                      weightsByLayer.append(w)
-                  if len(weightsByLayer)>0:
-                      allWeightsByLayer[layer._name] = np.array(weightsByLayer)
-              labelsW = []
-              histosW = []
+            zeroWeights    = 0
+            nonzeroWeights = 0
+            allWeightsByLayer = {}
+            for layer in model.layers:
+              if (layer._name).find("batch")!=-1 or len(layer.get_weights())<1:
+                continue
+              weights = layer.get_weights()[0]
+              weightsByLayer = []
+              for w in weights:
+                weightsByLayer.append(w)
+                if w == 0: zeroWeights +=1
+                else: nonzeroWeights +=1
+              if len(weightsByLayer)>0:
+                allWeightsByLayer[layer._name.replace('prune_low_magnitude_','')] = np.array(weightsByLayer)
+            labelsW = []
+            histosW = []
+            
+            print("Number of zero-weights = {}".format(zeroWeights))
+            print("Number of non-zero-weights = {}".format(nonzeroWeights))
+            for key in reversed(sorted(allWeightsByLayer.keys())):
+              labelsW.append(key)
+              histosW.append(allWeightsByLayer[key])
 
-              for key in reversed(sorted(allWeightsByLayer.keys())):
-                  labelsW.append(key)
-                  histosW.append(allWeightsByLayer[key])
-
-              plt.figure()
-              bins = np.linspace(-1.5, 1.5, 50)
-              plt.hist(histosW,bins,histtype='step',stacked=False,label=labelsW)
-              plt.legend(prop={'size':10}, frameon=False)
-              axis = plt.gca()
-              ymin, ymax = axis.get_ylim()
-              plt.ylabel('Number of Weights')
-              plt.xlabel('Weights')
-              plt.savefig(f+'%s_weights.png'%m)
+            plt.figure()
+            fig,ax = plt.subplots()
+            # plt.semilogy()
+            plt.legend(loc='upper left',fontsize=15)
+            plt.grid(color='0.8', linestyle='dotted')
+            fig.tight_layout()
+            plt.figtext(0.925, 0.94,m.replace('_',' '), wrap=True, horizontalalignment='right')
+            add_logo(ax, fig, 0.14, position='upper right')
+            bins = np.linspace(-1.5, 1.5, 50)
+            colors = sns.color_palette("colorblind", len(histosW))
+            ax.hist(histosW,bins,histtype='stepfilled',stacked=True,label=labelsW,color=colors, edgecolor='black')
+            ax.legend(prop={'size':10}, frameon=False)
+            axis = plt.gca()
+            ymin, ymax = axis.get_ylim()
+            plt.ylabel('Number of Weights')
+            plt.xlabel('Weights')
+            plt.savefig('%s_weights.png'%m)
 
           # model.compile(loss=LOSS, optimizer=OPTIMIZER, metrics=["accuracy"])
 
