@@ -1,3 +1,5 @@
+#!/usr/bin/env python3
+
 """Training of 2D quantized CNN (with kFold cross validation)
 Author: Thea Aarrestad
 
@@ -10,6 +12,7 @@ os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'  #This is buggy after switching to absl
 import numpy as np
 np.random.seed(1337)  # for reproducibility
 import sys, os
+sys.stdout.flush()
 import tempfile
 import json
 import pandas as pd
@@ -46,8 +49,6 @@ from qkeras.utils import model_quantize
 import models
 from utils import getKfoldDataset, toJSON, trainingDiagnostics, performanceSummary,preprocess, print_model_sparsity
 
-
-  
 flags.DEFINE_string ('outdir'    , None , 'Output directory')
 flags.DEFINE_list   ('Filters'   , None , 'Filters   ')
 flags.DEFINE_list   ('Kernel'    , None , 'Kernel    ')
@@ -63,15 +64,20 @@ flags.DEFINE_integer('buffersize',1024, 'buffersize', lower_bound=100)
 flags.DEFINE_integer('nclasses'  ,10, 'nclasses', lower_bound=1)
 flags.DEFINE_boolean('prune', False, 'Prune model (dense only and full model pruning)')
 
+def setWeights(modelA,modelB):
+  for layerA,layerB in zip(modelA.layers,modelB.layers):
+    layerA.set_weights(layerB.get_weights())
 
 def getPrunedModels(fold,input_shape):
   
   pruning_params = {'pruning_schedule': sparsity.ConstantSparsity(0.75, begin_step=2000, frequency=100)}
 
   model_for_layerwise_pruning = getModel("layerwise_pruning_%i"%fold,"float_cnn_densePrune" , input_shape,pruning_params) 
-  model_for_full_pruning      = getModel("full_pruning_%i"%fold     ,"float_cnn_allPrune"   , input_shape,pruning_params) 
+  
+  model_for_1L_pruning   = getModel("1L_pruning_%i"%fold  ,"float_cnn_1L_Prune"   , input_shape,pruning_params) 
+  model_for_full_pruning = getModel("full_pruning_%i"%fold,"float_cnn_allPrune" , input_shape,pruning_params) 
 
-  return [model_for_layerwise_pruning,model_for_full_pruning]
+  return [model_for_layerwise_pruning,model_for_full_pruning,model_for_1L_pruning]
   
 def getQuantizedModel(fold,input_shape):
   
@@ -134,11 +140,11 @@ def getModel(name,modelName,input_shape,options={}):
   return model
   
 def getCallbacks(outdir_):
-  earlyStopping = EarlyStopping(monitor='val_loss', patience=10, verbose=1, mode='auto')
+  earlyStopping = EarlyStopping(monitor='val_loss', patience=5, verbose=1, mode='auto',min_delta=0.001)
   mcp_save_m    = ModelCheckpoint(outdir_+'/bestModel.h5', save_best_only=True, monitor='val_loss', mode='auto')
   mcp_save_w    = ModelCheckpoint(outdir_+'/bestWeights.h5', save_best_only=True,save_weights_only=True, monitor='val_loss', mode='auto')
   # tensorboard   = tf.keras.callbacks.TensorBoard(log_dir=outdir+'/logs/', update_freq='batch')
-  reduce_lr_loss = ReduceLROnPlateau(monitor='val_loss', factor=0.1, patience=7, verbose=1, min_delta=1e-4, mode='auto')
+  reduce_lr_loss = ReduceLROnPlateau(monitor='val_loss', factor=0.1, patience=5, verbose=1, min_delta=1e-4, mode='auto')
   
   if outdir_.find('quantized')==-1: 
     return [earlyStopping,mcp_save_m,mcp_save_w,reduce_lr_loss]
@@ -152,7 +158,7 @@ def fitModels(models,train_data, val_data):
       print("Model sparsity: {} ".format(model.name))
       print_model_sparsity(model)
       callbacks = [ pruning_callbacks.UpdatePruningStep(), 
-                    EarlyStopping(monitor='val_loss', patience=7, verbose=1, mode='auto'),
+                    EarlyStopping(monitor='val_loss', patience=6, verbose=1, mode='auto'),
                     #pruning_callbacks.PruningSummaries(log_dir=FLAGS.outdir+'/logs_%s/'%model.name),
                     ModelCheckpoint(FLAGS.outdir+'/%s/bestModel.h5'%model.name, save_best_only=True, monitor='val_loss', mode='auto'),
                     ModelCheckpoint(FLAGS.outdir+'/%s/bestWeights.h5'%model.name, save_best_only=True,save_weights_only=True, monitor='val_loss', mode='auto')]
@@ -168,6 +174,8 @@ def fitModels(models,train_data, val_data):
     val_score = model.evaluate(val_data)
     print('\n Test loss:', val_score[0])
     print('\n Test accuracy:', val_score[1])
+    np.savez(FLAGS.outdir+'/%s/scores'%model.name, val_score)
+        
     del model
     end = time.time()
     print('It took {} minutes to train!\n'.format( (end - start)/60.))
@@ -183,6 +191,9 @@ def buildModels(fold, input_shape, train_data, val_data,steps_per_epoch,eval_ste
     
     if FLAGS.prune == True:
       pruned_models = getPrunedModels(fold,input_shape)
+      full_model = tf.keras.models.load_model("one_hot/full_0/saved_model.h5")
+      for prunedModel in pruned_models:
+        setWeights(prunedModel,full_model)
       models = [model]+pruned_models
     else:
       models = [model]
@@ -197,7 +208,6 @@ def buildModels(fold, input_shape, train_data, val_data,steps_per_epoch,eval_ste
 def train(train_data_list, val_data_list, input_shape,train_size):
   
   for i,(val_,train_) in enumerate(zip(val_data_list, train_data_list)): 
-    if i>0: break
     print("Working on fold: {}".format(i))
     train_data = train_.map(preprocess).shuffle(FLAGS.buffersize).batch(FLAGS.batchsize)#.repeat() #see https://www.tensorflow.org/guide/data
     val_data   = val_ .map(preprocess).batch(FLAGS.batchsize)
@@ -214,7 +224,9 @@ def train(train_data_list, val_data_list, input_shape,train_size):
     # with STRATEGY.scope(): BUGGY!
     models = buildModels(i, input_shape, train_data, val_data,steps_per_epoch,eval_steps_per_epoch)
     fitModels(models,train_data, val_data)
-   
+    del train_data
+    del val_data
+    del models
 def main(argv):
   del argv  # Unused
 
@@ -252,7 +264,8 @@ if __name__ == '__main__':
   # STRATEGY = tf.distribute.MirroredStrategy(cross_device_ops=tf.distribute.HierarchicalCopyAllReduce()) BUGGY WITH PRUNING!
   
   OPTIMIZER   = Adam(learning_rate=0.001, beta_1=0.9, beta_2=0.999, epsilon=1e-07, amsgrad=False)
-  LOSS        = tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True)
+  # LOSS        = tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True) #When not targeting softmax but integers
+  LOSS        = tf.keras.losses.CategoricalCrossentropy()
   
   
   app.run(main)

@@ -26,15 +26,15 @@ To train use the command:
 python3 train.py --flagfile=float_cnn.cfg --prune=True
 ```
 
-Training diagnositics (using N folds)
+Training diagnositics (using k folds)
 
 ```
 python3 trainingDiagnostics.py -m "float_cnn/full;float_cnn/layerwise_pruning;float_cnn/full_pruning_" --names "Float;Pruned dense;Pruned all" --kfolds 10
 
 ```
-Plot weights, profile weights and plot ROC
+Plot weights, calculate flops, profile weights and plot ROC
 ```
-python3 compare_models.py -f float_cnn/ -m full
+python3 compareModels.py -m "float_cnn/full_0;float_cnn/layerwise_pruning_0;float_cnn/full_pruning_0;float_cnn/1L_pruning_0" --names "Unpruned;Pruned dense;Pruned all;Pruned conv 1" -w -R 
 ```
 
 ## Hyperparameter scan (Bayesian Optimisation)

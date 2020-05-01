@@ -1,4 +1,7 @@
 import os
+print("Set TF logging level to minimum (INFO and WARNING messages are not printed)")
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'  #This is buggy after switching to absl, set manually with SET TF_CPP_MIN_LOG_LEVEL=3
+
 from optparse import OptionParser
 import pandas as pd
 import numpy as np
@@ -17,124 +20,137 @@ import matplotlib.pyplot as plt
 from hls4ml.model.profiling import numerical
 print("Importing private libraries")
 import models
-from utils import getDatasets,getKfoldDataset, toJSON, parse_config, trainingDiagnostics, performanceSummary,preprocess,print_model_sparsity,add_logo
+from utils import preprocess,add_logo
 from tensorflow_model_optimization.python.core.sparsity.keras import pruning_wrapper
-
-  
+from util import profile
+import tensorflow_datasets as tfds
 import matplotlib.pyplot as plt
+
+def doOPS(model):
+  print("Counting number of OPS in model")
+  model.summary()
+  layer_name, layer_flops, inshape, weights = profile(model)
+  for name, flop, shape, weight in zip(layer_name, layer_flops, inshape, weights):
+      print("layer:", name, shape, " MegaFLOPS:", flop/1e6, " MegaWeights:", weight/1e6)
+  totalGFlops = sum(layer_flops)/1e9
+  print("Total FLOPS[GFLOPS]:",totalGFlops )
+  return totalGFlops
+  
+def doWeights(model,outdir="plots/"):
+  zeroWeights    = 0
+  nonzeroWeights = 0
+  allWeightsByLayer = {}
+  for layer in model.layers:
+    layername = layer._name
+    if layername.find("prune")!=-1:
+      layername = layername.replace('prune_low_magnitude_','').replace('_',' ')
+      layername = layername + ' (Pruned)' 
+       
+    if (layer._name).find("batch")!=-1 or len(layer.get_weights())<1:
+      continue
+    weights = layer.get_weights()[0]
+    weightsByLayer = []
+    for w in weights:
+      weightsByLayer.append(w)
+    if len(weightsByLayer)>0:
+      allWeightsByLayer[layername] = np.array(weightsByLayer)
+  labelsW = []
+  histosW = []
+  
+  print("Number of zero-weights = {}".format(zeroWeights))
+  print("Number of non-zero-weights = {}".format(nonzeroWeights))
+  for key in reversed(sorted(allWeightsByLayer.keys())):
+    labelsW.append(key)
+    histosW.append(allWeightsByLayer[key])
+
+  plt.figure()
+  fig,ax = plt.subplots()
+  # plt.semilogy()
+  plt.legend(loc='upper left',fontsize=15)
+  plt.grid(color='0.8', linestyle='dotted')
+  plt.figtext(0.125, 0.18,model_name.replace('_',' ').replace('0',''), wrap=True, horizontalalignment='left',verticalalignment='center')
+  add_logo(ax, fig, 0.14, position='upper right')
+  bins = np.linspace(-1.5, 1.5, 50)
+  colors = sns.color_palette("colorblind", len(histosW))
+  ax.hist(histosW,bins,histtype='stepfilled',stacked=True,label=labelsW,color=colors, edgecolor='black')
+  ax.legend(prop={'size':10}, frameon=False)
+  axis = plt.gca()
+  ymin, ymax = axis.get_ylim()
+  plt.ylabel('Number of Weights')
+  plt.xlabel('Weights')
+  plt.savefig(outdir+'/%s_weights.pdf'%model.name)
+  
+def doProfiling(model,X_test,outdir="plots/"):
+  plt.figure()
+  wp, ap = numerical(keras_model=model, X=X_test[:1000])
+  # plt.show()
+  wp.savefig(outdir+'/%s_profile_weights.pdf'%m)
+  ap.savefig(outdir+'/%s_profile_activations.pdf'%m)
+    
+def makeRocs(features_val, labels, labels_val, model, outputDir='plots/'):
+  
+    predict_test = model.predict(features_val)
+    df = pd.DataFrame()
+    
+    fpr = {}
+    tpr = {}
+    auc1 = {}
+    
+    plt.figure()  
+    fig,ax = plt.subplots()     
+    for i, label in enumerate(labels):
+        df[label] = labels_val[:,i]
+        df[label + '_pred'] = predict_test[:,i]
+    
+        fpr[label], tpr[label], threshold = metrics.roc_curve(df[label],df[label+'_pred'])
+        auc1[label] = metrics.auc(fpr[label], tpr[label])
+        plt.plot(tpr[label],fpr[label],label='%s, AUC = %.1f%%'%(label.replace('j_',''),auc1[label]*100.))
+    plt.semilogy()
+    plt.xlabel("Signal Efficiency")
+    plt.ylabel("Background Efficiency")
+    plt.ylim(0.0005,1)
+    plt.grid(True)
+    plt.legend(loc='upper left')
+    add_logo(ax, fig, 0.14, position='upper right')
+    plt.figtext(0.125, 0.18,model_name.replace('_',' ').replace('0',''), wrap=True, horizontalalignment='left',verticalalignment='center')
+    plt.savefig(outputDir+'%s_ROC.pdf'%model.name)
+   
 if __name__ == "__main__":
   parser = OptionParser()
-  parser.add_option('-f','--folders',action='store',type='string',dest='folders',default='float_cnn/', help='in folders')
-  parser.add_option('-m','--models' ,action='store',type='string',dest='models' ,default='full_0', help='model')
-  parser.add_option('-s','--svhn',action='store_true', dest='svhn', default=True, help='Use SVHN')
-  parser.add_option('--mnist',action='store_true', dest='mnist', default=False, help='Use MNIST')
-  parser.add_option('-p','--predict',action='store', type='int', dest='predict', default=1, help='Which MNIST number to predict')
+  parser.add_option('-n','--names' ,action='store',type='string',dest='names' ,default='float', help='model name')
+  parser.add_option('-m','--models' ,action='store',type='string',dest='models' ,default='float_cnn/full_0', help='model')
+  parser.add_option('-p','--predict',action='store', type='int', dest='predict', default=1, help='Which number to predict')
   parser.add_option('-w','--doWeights',action='store_true', dest='doWeights', default=False, help='Plot weights')
   parser.add_option('-P','--doProfile',action='store_true', dest='doProfile', default=False, help='Do profile')
+  parser.add_option('-O','--doOPS',action='store_true', dest='doOPS', default=False, help='Count OPS')
+  parser.add_option('-R','--doROC',action='store_true', dest='doROC', default=False, help='Plot ROC curves')
   (options,args) = parser.parse_args()
   
-  
-  X_train, X_test, Y_train, Y_test  = getDatasets(nclasses=10,doMnist=options.mnist,doSvhn=options.svhn,greyScale=False,ext=False)
-  folders = [str(f) for f in options.folders.split(',')]
-  models  = [str(f) for f in options.models.split(',')]
-  
+  print(" Run with:")
+  print(' python3 compareModels.py -m "float_cnn/full_0;float_cnn/layerwise_pruning_0;float_cnn/full_pruning_0;float_cnn/1L_pruning_0" --names "Unpruned;Pruned dense;Pruned all;Pruned conv 1" -w -R ')
+
+  (img_train, label_train), (img_test, label_test) = tfds.load("svhn_cropped", split=['train', 'test'], batch_size=-1, as_supervised=True,)
+  del (img_train, label_train)
+  X_test, Y_test = preprocess(img_test, label_test)
+  models  = [str(f) for f in options.models.split(';')]
+  names   = [str(f) for f in options.names.split(';')]
   df = pd.DataFrame()
   
-  fpr = {}
-  tpr = {}
-  auc1 = {}
-  scores = []
-  labels = []
-  for f,m in zip(folders,models):
+  for m,model_name in zip(models,names):
     scores_ = list()
-    for root, dirs, files in os.walk(f, topdown=False):
-      for name in dirs:
-        if name.find(m)!=-1:
-          fullname = (os.path.join(root, name))
-          model_name = fullname.split('/')[-1]
-          model = tf.keras.models.load_model(fullname+"/saved_model.h5",custom_objects={'PruneLowMagnitude': pruning_wrapper.PruneLowMagnitude})
-
-          if options.doProfile:
-            plt.figure()
-            wp, ap = numerical(keras_model=model, X=X_test[:1000])
-            # plt.show()
-            wp.savefig('%s_profile_weights.png'%m)
-            ap.savefig('%s_profile_activations.png'%m)
-
-          if options.doWeights:
-            zeroWeights    = 0
-            nonzeroWeights = 0
-            allWeightsByLayer = {}
-            for layer in model.layers:
-              if (layer._name).find("batch")!=-1 or len(layer.get_weights())<1:
-                continue
-              weights = layer.get_weights()[0]
-              weightsByLayer = []
-              for w in weights:
-                weightsByLayer.append(w)
-                if w == 0: zeroWeights +=1
-                else: nonzeroWeights +=1
-              if len(weightsByLayer)>0:
-                allWeightsByLayer[layer._name.replace('prune_low_magnitude_','')] = np.array(weightsByLayer)
-            labelsW = []
-            histosW = []
-            
-            print("Number of zero-weights = {}".format(zeroWeights))
-            print("Number of non-zero-weights = {}".format(nonzeroWeights))
-            for key in reversed(sorted(allWeightsByLayer.keys())):
-              labelsW.append(key)
-              histosW.append(allWeightsByLayer[key])
-
-            plt.figure()
-            fig,ax = plt.subplots()
-            # plt.semilogy()
-            plt.legend(loc='upper left',fontsize=15)
-            plt.grid(color='0.8', linestyle='dotted')
-            fig.tight_layout()
-            plt.figtext(0.925, 0.94,m.replace('_',' '), wrap=True, horizontalalignment='right')
-            add_logo(ax, fig, 0.14, position='upper right')
-            bins = np.linspace(-1.5, 1.5, 50)
-            colors = sns.color_palette("colorblind", len(histosW))
-            ax.hist(histosW,bins,histtype='stepfilled',stacked=True,label=labelsW,color=colors, edgecolor='black')
-            ax.legend(prop={'size':10}, frameon=False)
-            axis = plt.gca()
-            ymin, ymax = axis.get_ylim()
-            plt.ylabel('Number of Weights')
-            plt.xlabel('Weights')
-            plt.savefig('%s_weights.png'%m)
-
-          # model.compile(loss=LOSS, optimizer=OPTIMIZER, metrics=["accuracy"])
-
-
-          score        = model.evaluate(X_test, Y_test, verbose=0)
-          predict_test = model.predict (X_test)
-
-          print("For model %s" %model_name)
-          print ('Keras test score:', score[0])
-          print ('Keras test accuracy:', score[1])
+    model = tf.keras.models.load_model(m+"/saved_model.h5",custom_objects={'PruneLowMagnitude': pruning_wrapper.PruneLowMagnitude})
     
-          df[model_name] = Y_test
-          df[model_name + '_pred'] = np.argmax(predict_test,axis=1)
-          fpr[model_name], tpr[model_name], threshold = metrics.roc_curve( df[model_name],df[model_name+'_pred'],pos_label=options.predict )
-
-          auc1[model_name] = metrics.auc(fpr[model_name], tpr[model_name])
-          # score_file = np.load('float_cnn/scores.npz')
-  #         print(score_file.files)
-  #         scores_ =score_file['arr_0']
-  #         scores.append(scores_)
-  #         label = ('$<m>=%.1f$ $\sigma$=%.1f (k=%i)' % (np.mean(scores_)*100, np.std(scores_)*100, len(scores_)))
-  #         labels.append(label)
-  for model_name in auc1:
-      plt.plot(tpr[model_name],fpr[model_name],label='%s, AUC = %.4f'%(model_name.replace("model","").replace("_"," "),auc1[model_name]))
-  plt.ylabel("False positive rate")
-  plt.xlabel("True positive rate")
-  plt.ylim(0.001,1.01)
-  plt.xlim(0.9,1.0)
-  plt.yscale('log')
-  plt.grid(True)
-  plt.legend(loc='upper left')
-  plt.figtext(0.24, 0.90,'hls4ml',fontweight='bold', wrap=True, horizontalalignment='right', fontsize=14)
-  plt.figtext(0.9, 0.9,"y=%i"%options.predict, wrap=True, horizontalalignment='right', fontsize=12)
-  plt.savefig('ROC_compare_zy%i.png'%(options.predict))
-  performanceSummary(scores,labels, outdir='./',outname='/performance_summary.png')
-
+    if m.name.find('prune')!=-1:
+      options.doOPS = False
+    if options.doOPS:
+      totalGFlops = doOPS(model)
+    
+    if options.doProfile:
+      doProfiling(model,X_test)
+      
+    if options.doWeights:
+      doWeights(model)
+    if options.doROC:
+      labels=['%i'%nr for nr in range (0,10)]
+      makeRocs(X_test, labels, Y_test, model)
+ 

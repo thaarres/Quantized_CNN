@@ -44,7 +44,19 @@ print("Importing private libraries")
 from callbacks import all_callbacks
 import models
 
-
+def getFeaturesLabels(name="svhn_cropped"):
+  (img_train, label_train), (img_test, label_test) = tfds.as_numpy(tfds.load(name, split=['train', 'test'], batch_size=-1, as_supervised=True,))
+  return (img_train, label_train),(img_test, label_test)
+  
+def dataset2numpy(dataset, steps=1):
+    "Helper function to get data/labels back from TF dataset"
+    iterator = dataset.make_one_shot_iterator()
+    next_val = iterator.get_next()
+    with tf.Session() as sess:
+        for _ in range(steps):
+           inputs, labels = sess.run(next_val)
+           yield inputs, labels
+           
 def parse_config(config_file) :
 
   print("Loading configuration from", config_file)
@@ -72,7 +84,7 @@ def fixSVHNLabel(labels):
     labels[labels == 10] = 0
     return labels
 
-def plot_images(img, labels, nrows, ncols,outname='svhn_data.png'):
+def plot_images(img, labels, nrows, ncols,outname='svhn_data.pdf'):
     fig, axes = plt.subplots(nrows, ncols)
     for i, ax in enumerate(axes.flat): 
         if img[i].shape == (32, 32, 3):
@@ -82,18 +94,6 @@ def plot_images(img, labels, nrows, ncols,outname='svhn_data.png'):
         ax.set_xticks([]); ax.set_yticks([])
         ax.set_title(labels[i])
     fig.savefig(outname)    
-
-# def getTFDatasets(name='svhn_cropped'):
-#   ##TO DO
-#   train = tfds.load(name=name, split="train")
-#   assert isinstance(train, tf.data.Dataset)
-#   print(train)
-#   for example in train.take(1):  # Only take a single example
-#     image, label = train["image"], train["label"]
-#     plt.imshow(image.numpy()[:, :, 0].astype(np.float32), cmap=plt.get_cmap("gray"))
-#     print("Label: %d" % label.numpy())
-#   return train
-  
     
 def getDatasets(nclasses,doMnist=False,doSvhn=False,greyScale=False,ext=False):
   
@@ -160,7 +160,7 @@ def getDatasets(nclasses,doMnist=False,doSvhn=False,greyScale=False,ext=False):
 
 def preprocess(image, label,nclasses=10):
   image = tf.cast(image, tf.float32) / 255.
-  #label = tf.one_hot(tf.squeeze(label), nclasses)
+  label = tf.one_hot(tf.squeeze(label), nclasses)
   return image, label
   
 def getKfoldDataset(name="svhn_cropped",extra=False,val_percent=10):    
@@ -178,7 +178,7 @@ def getKfoldDataset(name="svhn_cropped",extra=False,val_percent=10):
   
   return test_data, train_data, val_data, info
   
-def trainingDiagnostics(historiesPerFold,outdir,filename='learning_curve.png'):
+def trainingDiagnostics(historiesPerFold,outdir,filename='learning_curve.pdf'):
   print("Plotting loss and accuracy per epoch for {} folds".format(len(historiesPerFold)))
   plt.clf()
   f, (ax1, ax2) = plt.subplots(2, sharex=True, sharey=False)
@@ -209,12 +209,15 @@ def trainingDiagnostics(historiesPerFold,outdir,filename='learning_curve.png'):
     axis.set_major_locator(plt.MaxNLocator(3))
   plt.savefig(outdir+"/"+filename)
 
-def performanceSummary(scores,labels, outdir,outname='/performance_summary.png'):
+def performanceSummary(scores,labels, outdir,outname='/performance_summary.pdf'):
   plt.clf()
   fig, ax = plt.subplots()
-  # ax.set_ylim(0.85,1.0)
-  colors = ["steelblue","peru","g","indianred"]*2
-  # boxes = list()
+  # plt.legend(loc='upper left',fontsize=15)
+  plt.grid(color='0.8', linestyle='dotted')
+  # plt.figtext(0.925, 0.94,m.replace('_',' '), wrap=True, horizontalalignment='right')
+  add_logo(ax, fig, 0.14, position='upper right')
+  bins = np.linspace(-1.5, 1.5, 50)
+  colors = sns.color_palette("colorblind", len(scores))
   for i, model in enumerate(scores):
     bp1 = ax.boxplot(model, positions=[i], bootstrap=1000, notch=False, widths=0.5, patch_artist=True, boxprops=dict(facecolor=colors[i]),medianprops=dict(color="black"),showfliers=False)
     # boxes.append(bp1)
@@ -222,7 +225,7 @@ def performanceSummary(scores,labels, outdir,outname='/performance_summary.png')
   # bps = [ b['boxes'][0] for b in boxes ]
   # ax.legend(boxes, [labels], loc='upper right')
 	
-  # ax.set_xlim(0,6)
+  ax.set_ylim(0.9,1.0)
 	
 	# for i,(score,label) in enumerate(zip(scores,labels)):
 #     boxes.append = ( ax.boxplot(score, bootstrap=1000, notch=True, patch_artist=True, boxprops=dict(facecolor="rosybrown"),medianprops=dict(color="orangered"),showfliers=False,positions=[i],widths=0.5),label=)
