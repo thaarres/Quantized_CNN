@@ -109,6 +109,7 @@ def makeRocs(features_val, labels, labels_val, model, outputDir='plots/'):
     plt.xlabel("Signal Efficiency")
     plt.ylabel("Background Efficiency")
     plt.ylim(0.0005,1)
+    plt.xlim(0.2,1)
     plt.grid(True)
     plt.legend(loc='upper left')
     add_logo(ax, fig, 0.14, position='upper right')
@@ -140,7 +141,7 @@ if __name__ == "__main__":
     scores_ = list()
     model = tf.keras.models.load_model(m+"/saved_model.h5",custom_objects={'PruneLowMagnitude': pruning_wrapper.PruneLowMagnitude})
     
-    if m.name.find('prune')!=-1:
+    if model.name.find('prune')!=-1:
       options.doOPS = False
     if options.doOPS:
       totalGFlops = doOPS(model)

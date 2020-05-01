@@ -209,7 +209,7 @@ def trainingDiagnostics(historiesPerFold,outdir,filename='learning_curve.pdf'):
     axis.set_major_locator(plt.MaxNLocator(3))
   plt.savefig(outdir+"/"+filename)
 
-def performanceSummary(scores,labels, outdir,outname='/performance_summary.pdf'):
+def performanceSummary(scores,labels, outdir,outname='/performance_summary.pdf',folds=10):
   plt.clf()
   fig, ax = plt.subplots()
   # plt.legend(loc='upper left',fontsize=15)
@@ -219,19 +219,16 @@ def performanceSummary(scores,labels, outdir,outname='/performance_summary.pdf')
   bins = np.linspace(-1.5, 1.5, 50)
   colors = sns.color_palette("colorblind", len(scores))
   for i, model in enumerate(scores):
-    bp1 = ax.boxplot(model, positions=[i], bootstrap=1000, notch=False, widths=0.5, patch_artist=True, boxprops=dict(facecolor=colors[i]),medianprops=dict(color="black"),showfliers=False)
-    # boxes.append(bp1)
-	
-  # bps = [ b['boxes'][0] for b in boxes ]
-  # ax.legend(boxes, [labels], loc='upper right')
-	
-  ax.set_ylim(0.9,1.0)
+    bp1 = ax.boxplot(model, positions=[i], bootstrap=1000, notch=False, widths=0.5, patch_artist=True, boxprops=dict(facecolor=colors[i]),medianprops=dict(color="black"),showfliers=True)
+  
+  ax.set_ylim(0.94,1.0)
+  # plt.legend(loc='upper left',fontsize=15)
 	
 	# for i,(score,label) in enumerate(zip(scores,labels)):
 #     boxes.append = ( ax.boxplot(score, bootstrap=1000, notch=True, patch_artist=True, boxprops=dict(facecolor="rosybrown"),medianprops=dict(color="orangered"),showfliers=False,positions=[i],widths=0.5),label=)
 #   print(boxes[i])
 #   ax.legend([boxes['boxes'][0]], [labels], loc='upper right')
-#   ax.text(0.98, 0.98, 'k-Fold cross-validaton , k=%i'%len(scores), verticalalignment='top',horizontalalignment='right',transform=ax.transAxes,color='slategray', fontsize=8)
+  ax.text(0.1 , 0.98, 'k-Fold cross-validaton , k=%i'%folds, verticalalignment='top',horizontalalignment='left',transform=ax.transAxes,color='slategray', fontsize=8)
 #
   plt.ylabel("Accuracy")
   labels_ = [item.get_text() for item in ax.get_xticklabels()]

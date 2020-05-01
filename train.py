@@ -43,11 +43,12 @@ from tensorflow_model_optimization.python.core.sparsity.keras import pruning_cal
 import tensorboard
 
 import h5py
-from qkeras import quantized_bits
 from qkeras.utils import model_quantize
+from qkeras.estimate import print_qstats
 
 import models
-from utils import getKfoldDataset, toJSON, trainingDiagnostics, performanceSummary,preprocess, print_model_sparsity
+from utils import getKfoldDataset, toJSON, preprocess, print_model_sparsity
+from qdictionaries import allQDictionaries
 
 flags.DEFINE_string ('outdir'    , None , 'Output directory')
 flags.DEFINE_list   ('Filters'   , None , 'Filters   ')
@@ -63,9 +64,11 @@ flags.DEFINE_integer('batchsize' , 512, 'batchsize', lower_bound=1)
 flags.DEFINE_integer('buffersize',1024, 'buffersize', lower_bound=100)
 flags.DEFINE_integer('nclasses'  ,10, 'nclasses', lower_bound=1)
 flags.DEFINE_boolean('prune', False, 'Prune model (dense only and full model pruning)')
+flags.DEFINE_boolean('quantize', False, 'Quantize model')
 
-def setWeights(modelA,modelB):
-  for layerA,layerB in zip(modelA.layers,modelB.layers):
+def setWeights(model,full_model_path):
+  full_model = tf.keras.models.load_model(full_model_path)
+  for layerA,layerB in zip(model.layers,full_model.layers):
     layerA.set_weights(layerB.get_weights())
 
 def getPrunedModels(fold,input_shape):
@@ -79,49 +82,19 @@ def getPrunedModels(fold,input_shape):
 
   return [model_for_layerwise_pruning,model_for_full_pruning,model_for_1L_pruning]
   
-def getQuantizedModel(fold,input_shape):
+def getQuantizedModel(fold,input_shape,full_model_path="one_hot_v2/full_0/saved_model.h5"):
+  qmodels = []
   
-  model       = getModel("quantized_%i"%fold,FLAGS.KerasModel, input_shape)
   
-  q_dict={
-   'dense_1': {'activation': 'quantized_relu(4,0)',
-                'bias_quantizer': 'quantized_bits(4,0,1)',
-                'kernel_quantizer': 'quantized_bits(2,1,1,alpha=1.0)',
-                },
-   'output': {'bias_quantizer': 'quantized_bits(4,0,1)',
-                      'kernel_quantizer': "stochastic_binary(alpha='auto_po2')",
-                      'units': 5}}
-                      
-  return model_quantize(model, q_dict, 2)                  
-
- #
- #  bits = [4,6,8,12]#[1,4,6,8,12,16,20,32]
- #  ints = [0,1]#[0]
- #  from tensorflow.keras.models import Model
- #  quantizedModels = [Model() for i in range(len(bits)*len(ints))]
- #  for i in range(len(bits)):
- #    for j in range(len(ints)):
- #      # if i == 0 and j>0:
- # #        continue
- #      model = getattr(models, FLAGS.KerasModel)
- #      quantizer_conv  = quantized_bits(int(bits[i]),int(ints[j]),1); print(quantizer_conv )
- #      quantizer_dense = quantized_bits(int(bits[i]),int(ints[j]),1); print(quantizer_dense)
- #      quantizedModels[i] = model(
- #                          Input(input_shape),
- #                          FLAGS.nclasses,
- #                          FLAGS.Filters   ,
- #                          FLAGS.Kernel    ,
- #                          FLAGS.Strides   ,
- #                          FLAGS.Pooling   ,
- #                          FLAGS.Dropout   ,
- #                          FLAGS.Activation,
- #                          quantizer_dense ,
- #                          quantizer_conv
- #                          )
- #      quantizedModels[i]._name  = "quantised_b%i_i%i"%(bits[i],ints[j])
- #      if not os.path.exists(FLAGS.outdir+'/%s_%i/'%(quantizedModels[i].name,fold)):
- #        os.system('mkdir '+FLAGS.outdir+'/%s_%i/' %(quantizedModels[i].name,fold))
- #  return quantizedModels
+  try:
+    model = tf.keras.models.load_model(full_model_path)
+  except:
+    model = getModel("full_%i"%fold,FLAGS.KerasModel, input_shape)  
+  for name, dict_ in allQDictionaries.items():
+    qmodel =  model_quantize(model, dict_, 4, transfer_weights=True)   
+    qmodel._name = 'quantized_%s_%i'%(name,fold)
+    qmodels.append(qmodel)                  
+  return qmodels                 
 
 def getModel(name,modelName,input_shape,options={}):
   
@@ -135,8 +108,6 @@ def getModel(name,modelName,input_shape,options={}):
                         FLAGS.Dropout   ,
                         FLAGS.Activation,
                         options)
-  if not os.path.exists(FLAGS.outdir+'/%s/'%model.name):
-    os.system('mkdir '+FLAGS.outdir+'/%s/'%model.name)
   return model
   
 def getCallbacks(outdir_):
@@ -158,7 +129,8 @@ def fitModels(models,train_data, val_data):
       print("Model sparsity: {} ".format(model.name))
       print_model_sparsity(model)
       callbacks = [ pruning_callbacks.UpdatePruningStep(), 
-                    EarlyStopping(monitor='val_loss', patience=6, verbose=1, mode='auto'),
+                    ReduceLROnPlateau(monitor='val_loss', factor=0.1, patience=5, verbose=1, min_delta=1e-4, mode='auto'),
+                    EarlyStopping(monitor='val_loss', patience=5, verbose=1, mode='auto',min_delta=0.001),
                     #pruning_callbacks.PruningSummaries(log_dir=FLAGS.outdir+'/logs_%s/'%model.name),
                     ModelCheckpoint(FLAGS.outdir+'/%s/bestModel.h5'%model.name, save_best_only=True, monitor='val_loss', mode='auto'),
                     ModelCheckpoint(FLAGS.outdir+'/%s/bestWeights.h5'%model.name, save_best_only=True,save_weights_only=True, monitor='val_loss', mode='auto')]
@@ -183,23 +155,25 @@ def fitModels(models,train_data, val_data):
     
 def buildModels(fold, input_shape, train_data, val_data,steps_per_epoch,eval_steps_per_epoch):
   models = []
-  if FLAGS.KerasModel.find('quantized')!=-1: 
-    models = [getQuantizedModel(fold,input_shape)]
-    models[0].summary()
-  else:
-    model       = getModel("full_%i"%fold,FLAGS.KerasModel, input_shape)
+  if FLAGS.quantize == True:
+    models = getQuantizedModel(fold,input_shape)
     
-    if FLAGS.prune == True:
-      pruned_models = getPrunedModels(fold,input_shape)
-      full_model = tf.keras.models.load_model("one_hot/full_0/saved_model.h5")
-      for prunedModel in pruned_models:
-        setWeights(prunedModel,full_model)
-      models = [model]+pruned_models
-    else:
-      models = [model]
+  elif FLAGS.prune == True:
+    models = getPrunedModels(fold,input_shape)
+    for prunedModel in models:
+      setWeights(prunedModel,full_model_path="one_hot_v2/full_0/saved_model.h5")
+      
+  else:
+    model = [getModel("full_%i"%fold,FLAGS.KerasModel, input_shape)]
 
   for i,model in enumerate(models):
+    
     model.summary()
+    if FLAGS.quantize == True:
+      print_qstats(model)
+    
+    if not os.path.exists(FLAGS.outdir+'/%s/'%model.name):
+      os.system('mkdir '+FLAGS.outdir+'/%s/'%model.name)
     toJSON(model,FLAGS.outdir + '/%s/model.json'%model.name)
     model.compile(loss=LOSS, optimizer=OPTIMIZER, metrics=["accuracy"])
   return models          
