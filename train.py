@@ -125,9 +125,13 @@ def getCallbacks(outdir_):
 def fitModels(models,train_data, val_data):
   for model in models:
     callbacks = getCallbacks(FLAGS.outdir+'/%s/'%model.name)
-    if model.name.find("pruning")!=-1:
-      print("Model sparsity: {} ".format(model.name))
-      print_model_sparsity(model)
+    if FLAGS.quantize == True:
+      callbacks = [ ReduceLROnPlateau(monitor='val_loss', factor=0.1, patience=5, verbose=1, min_delta=1e-4, mode='auto'),
+                    ModelCheckpoint(FLAGS.outdir+'/%s/bestModel.h5'%model.name, save_best_only=True, monitor='val_loss', mode='auto'),
+                    ModelCheckpoint(FLAGS.outdir+'/%s/bestWeights.h5'%model.name, save_best_only=True,save_weights_only=True, monitor='val_loss', mode='auto')]
+      OPTIMIZER   = Adam(learning_rate=0.005, beta_1=0.9, beta_2=0.999, epsilon=1e-07, amsgrad=False)              
+    
+    if FLAGS.prune == True:
       callbacks = [ pruning_callbacks.UpdatePruningStep(), 
                     ReduceLROnPlateau(monitor='val_loss', factor=0.1, patience=5, verbose=1, min_delta=1e-4, mode='auto'),
                     EarlyStopping(monitor='val_loss', patience=5, verbose=1, mode='auto',min_delta=0.001),
@@ -135,6 +139,7 @@ def fitModels(models,train_data, val_data):
                     ModelCheckpoint(FLAGS.outdir+'/%s/bestModel.h5'%model.name, save_best_only=True, monitor='val_loss', mode='auto'),
                     ModelCheckpoint(FLAGS.outdir+'/%s/bestWeights.h5'%model.name, save_best_only=True,save_weights_only=True, monitor='val_loss', mode='auto')]
     start = time.time()
+    print("Training model {}".format(model.name))
     history = model.fit(train_data,
                         epochs =  FLAGS.epochs, 
                         validation_data=val_data,
@@ -144,6 +149,7 @@ def fitModels(models,train_data, val_data):
     history_dict = history.history
     pd.DataFrame.from_dict(history.history).to_csv(FLAGS.outdir+'/%s/history_dict.csv'%model.name,index=False)
     val_score = model.evaluate(val_data)
+    print("Done training model {}".format(model.name))
     print('\n Test loss:', val_score[0])
     print('\n Test accuracy:', val_score[1])
     np.savez(FLAGS.outdir+'/%s/scores'%model.name, val_score)

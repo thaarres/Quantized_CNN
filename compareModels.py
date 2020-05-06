@@ -26,6 +26,7 @@ from util import profile
 import tensorflow_datasets as tfds
 import matplotlib.pyplot as plt
 
+from qkeras import QConv2D, QDense, Clip, QActivation
 def doOPS(model):
   print("Counting number of OPS in model")
   model.summary()
@@ -63,7 +64,7 @@ def doWeights(model,outdir="plots/"):
     labelsW.append(key)
     histosW.append(allWeightsByLayer[key])
 
-  plt.figure()
+  plt.clf()
   fig,ax = plt.subplots()
   # plt.semilogy()
   plt.legend(loc='upper left',fontsize=15)
@@ -81,11 +82,11 @@ def doWeights(model,outdir="plots/"):
   plt.savefig(outdir+'/%s_weights.pdf'%model.name)
   
 def doProfiling(model,X_test,outdir="plots/"):
-  plt.figure()
+  plt.clf()
   wp, ap = numerical(keras_model=model, X=X_test[:1000])
   # plt.show()
-  wp.savefig(outdir+'/%s_profile_weights.pdf'%m)
-  ap.savefig(outdir+'/%s_profile_activations.pdf'%m)
+  wp.savefig(outdir+'/%s_profile_weights.pdf'%model.name)
+  ap.savefig(outdir+'/%s_profile_activations.pdf'%model.name)
     
 def makeRocs(features_val, labels, labels_val, model, outputDir='plots/'):
   
@@ -96,7 +97,7 @@ def makeRocs(features_val, labels, labels_val, model, outputDir='plots/'):
     tpr = {}
     auc1 = {}
     
-    plt.figure()  
+    plt.clf()  
     fig,ax = plt.subplots()     
     for i, label in enumerate(labels):
         df[label] = labels_val[:,i]
@@ -104,7 +105,7 @@ def makeRocs(features_val, labels, labels_val, model, outputDir='plots/'):
     
         fpr[label], tpr[label], threshold = metrics.roc_curve(df[label],df[label+'_pred'])
         auc1[label] = metrics.auc(fpr[label], tpr[label])
-        plt.plot(tpr[label],fpr[label],label='%s, AUC = %.1f%%'%(label.replace('j_',''),auc1[label]*100.))
+        plt.plot(tpr[label],fpr[label],label='%s, AUC = %.2f%%'%(label.replace('j_',''),auc1[label]*100.))
     plt.semilogy()
     plt.xlabel("Signal Efficiency")
     plt.ylabel("Background Efficiency")
@@ -114,7 +115,7 @@ def makeRocs(features_val, labels, labels_val, model, outputDir='plots/'):
     plt.legend(loc='upper left')
     add_logo(ax, fig, 0.14, position='upper right')
     plt.figtext(0.125, 0.18,model_name.replace('_',' ').replace('0',''), wrap=True, horizontalalignment='left',verticalalignment='center')
-    plt.savefig(outputDir+'%s_ROC.pdf'%model.name)
+    plt.savefig(outputDir+'/%s_ROC.pdf'%model.name)
    
 if __name__ == "__main__":
   parser = OptionParser()
@@ -125,11 +126,16 @@ if __name__ == "__main__":
   parser.add_option('-P','--doProfile',action='store_true', dest='doProfile', default=False, help='Do profile')
   parser.add_option('-O','--doOPS',action='store_true', dest='doOPS', default=False, help='Count OPS')
   parser.add_option('-R','--doROC',action='store_true', dest='doROC', default=False, help='Plot ROC curves')
+  parser.add_option('-o','--outdir',action='store',type='string',dest='outdir',default='plots/', help='output folder')
   (options,args) = parser.parse_args()
   
   print(" Run with:")
   print(' python3 compareModels.py -m "float_cnn/full_0;float_cnn/layerwise_pruning_0;float_cnn/full_pruning_0;float_cnn/1L_pruning_0" --names "Unpruned;Pruned dense;Pruned all;Pruned conv 1" -w -R ')
-
+  
+  outdir = options.outdir
+  if not os.path.exists(outdir):
+    os.system('mkdir '+outdir)
+    
   (img_train, label_train), (img_test, label_test) = tfds.load("svhn_cropped", split=['train', 'test'], batch_size=-1, as_supervised=True,)
   del (img_train, label_train)
   X_test, Y_test = preprocess(img_test, label_test)
@@ -139,7 +145,7 @@ if __name__ == "__main__":
   
   for m,model_name in zip(models,names):
     scores_ = list()
-    model = tf.keras.models.load_model(m+"/saved_model.h5",custom_objects={'PruneLowMagnitude': pruning_wrapper.PruneLowMagnitude})
+    model = tf.keras.models.load_model(m+"/saved_model.h5",custom_objects={'PruneLowMagnitude': pruning_wrapper.PruneLowMagnitude,'QDense': QDense, 'QConv2D': QConv2D, 'Clip': Clip, 'QActivation': QActivation})
     
     if model.name.find('prune')!=-1:
       options.doOPS = False
@@ -147,11 +153,11 @@ if __name__ == "__main__":
       totalGFlops = doOPS(model)
     
     if options.doProfile:
-      doProfiling(model,X_test)
+      doProfiling(model,X_test,outdir)
       
     if options.doWeights:
-      doWeights(model)
+      doWeights(model,outdir)
     if options.doROC:
       labels=['%i'%nr for nr in range (0,10)]
-      makeRocs(X_test, labels, Y_test, model)
+      makeRocs(X_test, labels, Y_test, model,outdir)
  

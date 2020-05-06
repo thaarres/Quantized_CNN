@@ -221,7 +221,7 @@ def performanceSummary(scores,labels, outdir,outname='/performance_summary.pdf',
   for i, model in enumerate(scores):
     bp1 = ax.boxplot(model, positions=[i], bootstrap=1000, notch=False, widths=0.5, patch_artist=True, boxprops=dict(facecolor=colors[i]),medianprops=dict(color="black"),showfliers=True)
   
-  ax.set_ylim(0.94,1.0)
+  ax.set_ylim(0.5,1.0)
   # plt.legend(loc='upper left',fontsize=15)
 	
 	# for i,(score,label) in enumerate(zip(scores,labels)):
