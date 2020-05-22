@@ -18,12 +18,14 @@ cd ../
 
 ## Training
 
-To train, flags are set using absl.flags (https://abseil.io/docs/python/guides/flags). Two flagfiles are provided: float_cnn.cfg and quantized_cnn.cfg  choose one of the provided *.yaml config files or create a new one. Specific architecture (see models.py), number of filters,kernel size, strides, loss function etc. can be set in flagfile or command line
+To train, flags are set using absl.flags (https://abseil.io/docs/python/guides/flags). One flagfile is provided: svhn_cnn.cfg, use this, pass all parameters from commandline or create a new flag file. Specific architecture (see models.py), number of filters,kernel size, strides, loss function etc. can be set in flagfile or command line
 
 To train use the command:
 
 ```
-python3 train.py --flagfile=float_cnn.cfg --prune=True
+python3 train.py --flagfile=svhn_cnn.cfg #Runs normal full model training
+python3 train.py --flagfile=svhn_cnn.cfg --prune=True #Runs pruning for 3 types: prune all, prune dense, prune largest flop consumer
+python3 train.py --flagfile=svhn_cnn.cfg --quantize=True #Runs quantization-aware training (runs all maps in qdictionaries.py)
 ```
 
 Training diagnositics (using k folds)
