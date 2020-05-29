@@ -8,8 +8,9 @@ Includes: kFold cross validation training and testing with TF Data, multi-GPU di
 For training: Python 3.6, TensorFlow version >= 2.1.0, Keras version: 2.2.4-tf, QKeras (https://github.com/google/qkeras).
 QKeras is a sub-module of this repositry. To build and install:
 ```
-git clone --recurse-submodules -j8 git@github.com:thaarres/Quantized_CNN.git
+git clone --recurse-submodules git@github.com:thaarres/Quantized_CNN.git
 cd Quantized_CNN/
+git submodule update --recursive
 cd qkeras/
 python3 setup.py build
 python3 setup.py install --user
