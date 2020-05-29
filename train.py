@@ -84,14 +84,13 @@ def getPrunedModels(fold,input_shape):
   
 def getQuantizedModel(fold,input_shape,full_model_path="one_hot_v2/full_0/saved_model.h5"):
   qmodels = []
-  
-  
   try:
     model = tf.keras.models.load_model(full_model_path)
   except:
     model = getModel("full_%i"%fold,FLAGS.KerasModel, input_shape)  
+  model.summary()
   for name, dict_ in allQDictionaries.items():
-    qmodel =  model_quantize(model, dict_, 4, transfer_weights=True)   
+    qmodel = model_quantize(model, dict_, 4, transfer_weights=False)   
     qmodel._name = 'quantized_%s_%i'%(name,fold)
     qmodels.append(qmodel)                  
   return qmodels                 
@@ -170,7 +169,7 @@ def buildModels(fold, input_shape, train_data, val_data,steps_per_epoch,eval_ste
       setWeights(prunedModel,full_model_path="one_hot_v2/full_0/saved_model.h5")
       
   else:
-    model = [getModel("full_%i"%fold,FLAGS.KerasModel, input_shape)]
+    models = [getModel("full_%i"%fold,FLAGS.KerasModel, input_shape)]
 
   for i,model in enumerate(models):
     
