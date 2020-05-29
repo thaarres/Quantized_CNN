@@ -12,7 +12,6 @@ os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'  #This is buggy after switching to absl
 import numpy as np
 np.random.seed(1337)  # for reproducibility
 import sys, os
-sys.stdout.flush()
 import tempfile
 import json
 import pandas as pd
@@ -127,9 +126,10 @@ def fitModels(models,train_data, val_data):
     callbacks = getCallbacks(FLAGS.outdir+'/%s/'%model.name)
     if FLAGS.quantize == True:
       callbacks = [ ReduceLROnPlateau(monitor='val_loss', factor=0.1, patience=5, verbose=1, min_delta=1e-4, mode='auto'),
+                    EarlyStopping(monitor='val_loss', patience=7, verbose=1, min_delta=1e-4, mode='auto'),
                     ModelCheckpoint(FLAGS.outdir+'/%s/bestModel.h5'%model.name, save_best_only=True, monitor='val_loss', mode='auto'),
                     ModelCheckpoint(FLAGS.outdir+'/%s/bestWeights.h5'%model.name, save_best_only=True,save_weights_only=True, monitor='val_loss', mode='auto')]
-      OPTIMIZER   = Adam(learning_rate=0.005, beta_1=0.9, beta_2=0.999, epsilon=1e-07, amsgrad=False)              
+      OPTIMIZER   = Adam(learning_rate=0.0001, beta_1=0.9, beta_2=0.999, epsilon=1e-07, amsgrad=False)              
     
     if FLAGS.prune == True:
       callbacks = [ pruning_callbacks.UpdatePruningStep(), 
@@ -170,7 +170,7 @@ def buildModels(fold, input_shape, train_data, val_data,steps_per_epoch,eval_ste
       setWeights(prunedModel,full_model_path="one_hot_v2/full_0/saved_model.h5")
       
   else:
-    model = [getModel("full_%i"%fold,FLAGS.KerasModel, input_shape)]
+    models = [getModel("full_%i"%fold,FLAGS.KerasModel, input_shape)]
 
   for i,model in enumerate(models):
     
