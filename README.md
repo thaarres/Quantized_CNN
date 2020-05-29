@@ -9,8 +9,8 @@ For training: Python 3.6, TensorFlow version >= 2.1.0, Keras version: 2.2.4-tf, 
 QKeras is a sub-module of this repositry. To build and install:
 ```
 git clone --recurse-submodules git@github.com:thaarres/Quantized_CNN.git
-git submodule update --recursive
 cd Quantized_CNN/
+git submodule update --recursive
 cd qkeras/
 python3 setup.py build
 python3 setup.py install --user
