@@ -12,8 +12,7 @@ git clone --recurse-submodules git@github.com:thaarres/Quantized_CNN.git
 cd Quantized_CNN/
 git submodule update --recursive
 cd qkeras/
-python3 setup.py build
-python3 setup.py install --user
+pip3 install --user -e . #Or python3 -m pip install --user -e .
 cd ../
 ```
 

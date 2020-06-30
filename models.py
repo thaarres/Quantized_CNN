@@ -33,6 +33,7 @@ def float_cnn(name_, Inputs,nclasses,filters,kernel,strides, pooling, dropout, a
     x = Activation(activation,name='conv_act_%i'%i)(x)
   x = Flatten()(x)
   x = Dense(128,kernel_initializer='lecun_uniform',name='dense_1', use_bias=False)(x)
+  x = Dropout(0.25) (x)
   x = BatchNormalization()(x)
   x = Activation(activation,name='dense_act')(x)
   x_out = Dense(nclasses, activation='softmax',name='output')(x)
