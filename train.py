@@ -52,10 +52,12 @@ import models
 from utils import getKfoldDataset, toJSON, preprocess, print_model_sparsity
 from qdictionaries import allQDictionaries
 from callbacks import all_callbacks
+from autoq import runAutoQKeras
 
-flags.DEFINE_boolean('debug'  , False, 'Debug training')
-#Which training to perform
-flags.DEFINE_boolean('prune'     , False, 'Prune model (dense only and full model pruning)')
+flags.DEFINE_boolean('optimize'  , False, 'Run AutoQ')
+flags.DEFINE_boolean('single'    , False, 'Train on one dataset (no kFold)')
+flags.DEFINE_boolean('debug'     , False, 'Debug training')
+flags.DEFINE_boolean('prune'     , False, 'Prune model')
 flags.DEFINE_boolean('quantize'  , False, 'Quantize model')
 
 # Training setting
@@ -79,66 +81,79 @@ flags.DEFINE_float  ('beta_1'    , 0.9, 'beta_1', lower_bound=0.)
 flags.DEFINE_float  ('beta_2'    , 0.999, 'beta_1', lower_bound=0.)
 flags.DEFINE_float  ('epsilon'   , 1e-07, 'epsilon', lower_bound=0.)
 
-def setWeights(model,full_model_path):
-  full_model = tf.keras.models.load_model(full_model_path)
-  for layerA,layerB in zip(model.layers,full_model.layers):
-    layerA.set_weights(layerB.get_weights())
 
-def getPrunedModels(full_models,fold,input_shape):
+def runAutoQ(STRATEGY,train_data, val_data, input_shape,train_size):
+  train_data = train_data.map(preprocess).shuffle(FLAGS.buffersize).batch(FLAGS.batchsize)#.repeat() #see https://www.tensorflow.org/guide/data
+  val_data   = val_data.map(preprocess).batch(FLAGS.batchsize)
+  model = getModel("full_autoQ",FLAGS.KerasModel, input_shape)
+  LOSS        = tf.keras.losses.CategoricalCrossentropy()
+  OPTIMIZER   = Adam(learning_rate=FLAGS.lr, beta_1=FLAGS.beta_1, beta_2=FLAGS.beta_2, epsilon=FLAGS.epsilon, amsgrad=False) 
+  model.compile(loss=LOSS, optimizer=OPTIMIZER, metrics=["accuracy"])
+  model.summary()
+  runAutoQKeras(STRATEGY,train_data,val_data,model)
+  
+def pruneDenseConv(layer):
+    if isinstance(layer, tf.keras.layers.Conv2D):
+      return tfmot.sparsity.keras.prune_low_magnitude(layer)
+    if isinstance(layer, tf.keras.layers.Dense) and layer.name!='output':
+      return tfmot.sparsity.keras.prune_low_magnitude(layer)  
+    return layer
+       
+def getPrunedModels(full_models,fold,input_shape,weightFile="/afs/cern.ch/user/t/thaarres/public/svhn_v10/full_0/KERAS_check_best_model.h5"):
+
   pruned_models = []
   for full_model in full_models:
+    full_model.load_weights(weightFile)
+    # pruning_params = {
+    #       'pruning_schedule': sparsity.PolynomialDecay(initial_sparsity=0.40,
+    #                                                    final_sparsity=0.75,
+    #                                                    begin_step=2000,
+    #                                                    end_step=4000,
+    #                                                    frequency=100)
+    # }
     pruning_params = {'pruning_schedule': sparsity.ConstantSparsity(0.75, begin_step=2000, frequency=100)}
-    m_pruned = prune.prune_low_magnitude(full_model, **pruning_params)
+    m_pruned = tf.keras.models.clone_model( full_model, clone_function=pruneDenseConv,)
+    m_pruned.summary()
     m_pruned._name = 'pruned_'+full_model.name
     pruned_models.append(m_pruned)
-  # m_dense_pruned = getModel("dense_pruned_%i"%fold,"float_cnn_densePrune" , input_shape,pruning_params)
-  # model_for_1L_pruning   = getModel("1L_pruning_%i"%fold  ,"float_cnn_1L_Prune"   , input_shape,pruning_params)
-  # m_pruned = getModel("pruned_%i"%fold,"float_cnn_allPrune" , input_shape,pruning_params)
 
-  # return [model_for_layerwise_pruning,model_for_full_pruning,model_for_1L_pruning]
-  # return [m_pruned,m_dense_pruned]
   return pruned_models
   
-def getQuantizedFromBits(model, fold, bitwidths=[4,6,8,10,12,16]):
+def getQuantizedFromBits(model, fold, bitwidths=[16,12,10,8,6,4],weightFile="/afs/cern.ch/user/t/thaarres/public/svhn_v10/full_0/KERAS_check_best_model.h5"):
   qmodels = []
-  for bitwidth in bitwidths: 
+  model.load_weights(weightFile)
+  for i in range(len(bitwidths)):
+    if i>0:
+      weightFile = weightFile.replace('full_0','quant_%ibit_%i'%(bitwidths[i-1],fold))
+      model.load_weights(weightFile)
     config = {
       "conv2d_1": {
-          "kernel_quantizer": "quantized_bits(%i,0,alpha=1)"%bitwidth,
-          "bias_quantizer": "quantized_bits(%i,0,alpha=1)"%bitwidth
+          "kernel_quantizer": "quantized_bits(%i,0,alpha=1)"%bitwidths[i],
+          "bias_quantizer": "quantized_bits(%i,0,alpha=1)"%bitwidths[i]
       },
       "QConv2D": {
-          "kernel_quantizer": "quantized_bits(%i,0,alpha=1)"%bitwidth,
-          "bias_quantizer": "quantized_bits(%i,0,alpha=1)"%bitwidth
+          "kernel_quantizer": "quantized_bits(%i,0,alpha=1)"%bitwidths[i],
+          "bias_quantizer": "quantized_bits(%i,0,alpha=1)"%bitwidths[i]
       },
       "QDense": {
-          "kernel_quantizer": "quantized_bits(%i,0,alpha=1)"%bitwidth,
-          "bias_quantizer": "quantized_bits(%i,0,alpha=1)"%bitwidth
+          "kernel_quantizer": "quantized_bits(%i,0,alpha=1)"%bitwidths[i],
+          "bias_quantizer": "quantized_bits(%i,0,alpha=1)"%bitwidths[i]
       },
-      "QActivation": { "relu": "quantized_relu(%i)"%32 },
-      "act_2": "quantized_relu(%i)"%32,
+      "QActivation": { "relu": "quantized_relu(%i,6)"%32 },
+      "act_2": "quantized_relu(%i,6)"%32,
     }
+    custom_objects = {'BatchNormalization' : tf.keras.layers.BatchNormalization}
+    qmodel = model_quantize(model, config, bitwidths[i], custom_objects=custom_objects, transfer_weights=True) 
+    qmodel._name = 'quant_%ibit_%i'%(bitwidths[i],fold)
     
-    # q_dict_generic = {
-#                     "conv_0": {
-#                     "kernel_quantizer": "quantized_bits(%i,0,alpha=1)"%bitwidth,
-#                     "bias_quantizer"  : "quantized_bits(%i,0,alpha=1)"%bitwidth
-#                     },
-#                     # "conv_1": {
-#                     # "kernel_quantizer": "quantized_bits(%i,0,alpha=1)"%bitwidth,
-#                     # "bias_quantizer"  : "quantized_bits(%i,0,alpha=1)"%bitwidth
-#                     # },
-#                     # "conv_2": {
-#                     # "kernel_quantizer": "quantized_bits(%i,0,alpha=1)"%bitwidth,
-#                     # "bias_quantizer"  : "quantized_bits(%i,0,alpha=1)"%bitwidth
-#                     # },
-#                     "dense_1": {
-#                         "kernel_quantizer": "quantized_bits(%i,0,alpha=1)"%bitwidth,
-#                         "bias_quantizer"  : "quantized_bits(%i,0,alpha=1)"%bitwidth
-#                     }}
-    qmodel = model_quantize(model, config, bitwidth, transfer_weights=False)
-    qmodel._name = 'quant_%ibit_%i'%(bitwidth,fold)
-    qmodels.append(qmodel)
+    if FLAGS.prune == True:
+      pruning_params = {'pruning_schedule': sparsity.ConstantSparsity(0.75, begin_step=2000, frequency=100)}
+      m_pruned = tf.keras.models.clone_model( qmodel, clone_function=pruneDenseConv,)
+      m_pruned.summary()
+      m_pruned._name = 'pruned_'+qmodel.name
+      qmodels.append(m_pruned)
+    else:  
+      qmodels.append(qmodel)
     
     for layer in qmodel.layers:
         if hasattr(layer, "kernel_quantizer"):
@@ -158,7 +173,10 @@ def getQuantizedFromMaps(full_model,fold,input_shape,full_model_path="one_hot_v2
     model = full_model
   model.summary()
   for name, dict_ in allQDictionaries.items():
-    qmodel = model_quantize(model, dict_, 4, transfer_weights=transferWeights)   
+    # Workaround for deserialization from JSON (used by model_quantize) not
+    # setting _USE_V2_BEHAVIOR=True thus using old V1 implementation
+    custom_objects = {'BatchNormalization' : tf.keras.layers.BatchNormalization}
+    qmodel = model_quantize(model, config, bitwidth, custom_objects=custom_objects, transfer_weights=transferWeights) 
     qmodel._name = 'quantized_%s_%i'%(name,fold)
     qmodels.append(qmodel)                  
   return qmodels                 
@@ -178,6 +196,12 @@ def getModel(name,modelName,input_shape,options={}):
   return model
   
 def getCallbacks(outdir_):
+  """Gets callbacks for training.
+    Arguments:
+      outdir_: Output directory
+    Returns:
+      list of callbacks, accessed through callbacks.callback.
+    """
   callbacks = all_callbacks(stop_patience = 7,
                             lr_factor = 0.5,
                             lr_patience = 4,
@@ -188,18 +212,34 @@ def getCallbacks(outdir_):
                             debug = 0)
   return callbacks
 
-def fitModels(models,train_data, val_data):
-  for model in models:
-    callbacks = getCallbacks(FLAGS.outdir+'/%s/'%model.name)           
+def fitModels(models,train_data, val_data,stepsPerEpoch,evalStepsPerEpoch):
+  """Runs Keras fit and saves model.
+    Arguments:
+      STRATEGY: Mirrored strategy
+      models: list of models to train
+      train_data: training data
+      val_data: validation data  
+    Returns:
+      None
+    """
     
+  for model in models:
+    
+    if not os.path.exists(FLAGS.outdir+'/%s/'%model.name):
+      os.system('mkdir '+FLAGS.outdir+'/%s/'%model.name)
+      
+    callbacks = getCallbacks(FLAGS.outdir+'/%s/'%model.name)           
     if FLAGS.prune == True:
       callbacks.callbacks.append(pruning_callbacks.UpdatePruningStep())
     
     start = time.time()
-    print("Training model {}".format(model.name))
-    # model.compile(loss=LOSS, optimizer=OPTIMIZER, metrics=["accuracy"])
+    # LOSS        = tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True) #When not targeting softmax but integers
+    LOSS        = tf.keras.losses.CategoricalCrossentropy()
+    OPTIMIZER   = Adam(learning_rate=FLAGS.lr, beta_1=FLAGS.beta_1, beta_2=FLAGS.beta_2, epsilon=FLAGS.epsilon, amsgrad=False) 
+    model.compile(loss=LOSS, optimizer=OPTIMIZER, metrics=["accuracy"])
+    model.summary()
     history = model.fit(train_data,
-                        epochs =  FLAGS.epochs, 
+                        epochs =  FLAGS.epochs,
                         validation_data = val_data,
                         callbacks = callbacks.callbacks,
                         verbose=1)     
@@ -216,50 +256,20 @@ def fitModels(models,train_data, val_data):
     if FLAGS.prune == True:
       model_stripped = strip_pruning(model)
       model.save(FLAGS.outdir + '/%s/tf_saved_model_stripped.h5'%model.name, save_format='tf')
-    del model
     end = time.time()
     print('\n It took {} minutes to train!\n'.format( (end - start)/60.))
   
     
-def buildModels(fold, input_shape, train_data, val_data,steps_per_epoch,eval_steps_per_epoch):
-  
-  models = [] 
-  full_model = getModel("full_%i"%fold,FLAGS.KerasModel, input_shape)
-  
-  if FLAGS.quantize == True:
-    # models = getQuantizedFromMaps(full_model,fold,input_shape)
-    qmodels = getQuantizedFromBits(full_model,fold,[4])
-    models  = qmodels
-    if FLAGS.prune == True:
-      pqmodels = getPrunedModels(qmodels,fold,input_shape)
-      models = qmodels+pqmodels  
-  elif FLAGS.prune == True:
-    models = getPrunedModels([full_model],fold,input_shape)
-    try:
-      full_model_path="one_hot_v2/full_0/saved_model.h5"
-      model = tf.keras.models.load_model(full_model_path)
-      for prunedModel in models:
-        setWeights(prunedModel,model)
-    except:
-      print(" No pretrained model found! Initialising pruned model weights randomly")
-      
-  else:
-    models = [full_model]
+def buildModels(fold, input_shape):
 
-  for i,model in enumerate(models):
+  full_model = getModel("full_%i"%fold,FLAGS.KerasModel, input_shape)
+  models = [full_model]
+  
+  if FLAGS.prune == True:
+    models = getPrunedModels([full_model],fold,input_shape)
+  elif FLAGS.quantize == True:
+    models = getQuantizedFromBits(full_model,fold,[16])
     
-    
-    
-    if not os.path.exists(FLAGS.outdir+'/%s/'%model.name):
-      os.system('mkdir '+FLAGS.outdir+'/%s/'%model.name)
-    
-    # LOSS        = tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True) #When not targeting softmax but integers
-    LOSS        = tf.keras.losses.CategoricalCrossentropy()
-    OPTIMIZER   = Adam(learning_rate=FLAGS.lr, beta_1=FLAGS.beta_1, beta_2=FLAGS.beta_2, epsilon=FLAGS.epsilon, amsgrad=False) 
-    model.compile(loss=LOSS, optimizer=OPTIMIZER, metrics=["accuracy"])
-    model.summary()
-    if FLAGS.quantize == True:
-      print_qstats(model)
   return models          
     
       
@@ -267,26 +277,26 @@ def train(STRATEGY,train_data_list, val_data_list, input_shape,train_size):
   
   for i,(val_,train_) in enumerate(zip(val_data_list, train_data_list)): 
     print("Working on fold: {}".format(i))
-    if i > 4: break
+    if FLAGS.single and i > 0:
+      break
+      
     train_data = train_.map(preprocess).shuffle(FLAGS.buffersize).batch(FLAGS.batchsize)#.repeat() #see https://www.tensorflow.org/guide/data
     val_data   = val_ .map(preprocess).batch(FLAGS.batchsize)
-    # Read a single batch of examples from the training set and display shapes.
+      
     for img_feature, label in train_data:
       break
+    print(" --------------INPUT INFO --------------")
     print('INPUT img_feature.shape (batch_size, image_height, image_width) =', img_feature.shape)
     print('INPUT label.shape (batch_size, number_of_labels) =', label.shape)
+    print(" --------------INPUT INFO --------------")
     
     steps_per_epoch      = int(train_size*0.9)  // FLAGS.batchsize #90% train, 10% validation in 10-fold xval
     eval_steps_per_epoch = int(train_size*0.1) //  FLAGS.batchsize
     
-    models = []
-    print('Spreading weights over N={} GPUs and updating in sync. Bulding models:'.format(STRATEGY.num_replicas_in_sync))
+    
     with STRATEGY.scope(): #must contain: creation of Keras model, optimizer and metrics
-      models = buildModels(i, input_shape, train_data, val_data,steps_per_epoch,eval_steps_per_epoch)
-    fitModels(models,train_data, val_data)
-    del train_data
-    del val_data
-    del models
+      models = buildModels(i, input_shape)
+      fitModels(models,train_data, val_data,steps_per_epoch,eval_steps_per_epoch)
     
 def main(argv):
   del argv  # Unused
@@ -297,16 +307,12 @@ def main(argv):
   else:
     os.environ['TF_CPP_MIN_LOG_LEVEL'] = "2"
     tf.get_logger().setLevel("ERROR")
-    
-  print("----------Setting up GPUs----------")
   
-  # Set memory growth
+  # Set GPUs
   gpus = tf.config.experimental.list_physical_devices('GPU')
   if gpus:
     try:
-      # Currently, memory growth needs to be the same across GPUs
       for gpu in gpus:
-        #tf.config.experimental.set_virtual_device_configuration(gpu,[tf.config.experimental.VirtualDeviceConfiguration(memory_limit=4096),tf.config.experimental.VirtualDeviceConfiguration(memory_limit=4096)])
         tf.config.experimental.set_memory_growth(gpu, True)
       logical_gpus = tf.config.experimental.list_logical_devices('GPU')
       print(len(gpus), "Physical GPUs,", len(logical_gpus), "Logical GPUs")
@@ -314,27 +320,31 @@ def main(argv):
       print(e)
       
   # Set mirrored strategy
-  STRATEGY = tf.distribute.MirroredStrategy( cross_device_ops=tf.distribute.HierarchicalCopyAllReduce()) #,devices=[ "/gpu:1", "/gpu:2"] #If anyone else is hogging a GPU, this might fail!
-  
+  STRATEGY = tf.distribute.MirroredStrategy( cross_device_ops=tf.distribute.ReductionToOneDevice()) #,devices=[ "/gpu:1", "/gpu:2"] #If anyone else is hogging a GPU, this might fail!
+    
   print('Scaling batch size with N devices in sync: {}'.format(STRATEGY.num_replicas_in_sync))
-  FLAGS.batchsize = FLAGS.batchsize*STRATEGY.num_replicas_in_sync
+  FLAGS.batchsize = FLAGS.batchsize#*STRATEGY.num_replicas_in_sync
   
   if not os.path.exists(FLAGS.outdir):
     os.system('mkdir '+FLAGS.outdir)
   
   # Get training data
   extra = True #Use full training set
+  if FLAGS.optimize or FLAGS.debug:
+    extra = False
   test_data_list, train_data_list, val_data_list, info = getKfoldDataset(name="svhn_cropped",extra=extra) # Val data = 30220, Train data = 574168 , Test data = 26032
   nclasses    = info.features['label'].num_classes
   input_shape = info.features['image'].shape 
   if extra:
     train_size  = info.splits['train'].num_examples + info.splits['extra'].num_examples
   else:
-    train_size = info.splits['train'].num_examples
-  
-  # Train!  
+    train_size = info.splits['train'].num_examples 
   print("Using {}-fold training and validation data".format(len(train_data_list)))
-  train(STRATEGY,train_data_list, val_data_list, input_shape,train_size)
+  
+  if FLAGS.optimize:
+    runAutoQ(STRATEGY,train_data_list[0], val_data_list[0], input_shape,train_size)
+  else: 
+    train(STRATEGY,train_data_list, val_data_list, input_shape,train_size)
   print("Done!")
 
 if __name__ == '__main__':

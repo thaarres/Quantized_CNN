@@ -22,7 +22,7 @@ print("Importing private libraries")
 import models
 from utils import preprocess,add_logo
 from tensorflow_model_optimization.python.core.sparsity.keras import pruning_wrapper
-from util import profile
+from floputil import profile
 import tensorflow_datasets as tfds
 import matplotlib.pyplot as plt
 
