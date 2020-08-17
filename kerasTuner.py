@@ -4,15 +4,26 @@ import math
 import h5py
 import kerastuner as kt
 import tensorflow as tf
+import argparse
+
 logging.info('Tensorflow version ' + tf.__version__)
 import tensorflow_datasets as tfds
 AUTO = tf.data.experimental.AUTOTUNE
     
 from utils.generator import DataGenerator
-
+from utils.ktuner import SearchResults
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 # tf.get_logger().setLevel('ERROR')
     
+def restoreBestModel(dir, project, obj='val_accuracy'):
+  res = SearchResults(directory=dir,
+                      project_name=project,
+                      objective=obj                   
+                     )
+  res.reload()
+  model = res.get_best_models()[0]
+  return model
+      
 def doTest():
   with strategy.scope(): # this line is all that is needed to run on TPU (or multi-GPU, ...)
     model = tf.keras.Sequential([
@@ -109,7 +120,7 @@ def build_model(hp):
   x = inputs
   for i in range(hp.Int('conv_layers', 1, 4, default=3)):
     x = tf.keras.layers.Conv2D( #tf.keras.layers.SeparableConv2D(
-        filters=hp.Choice('filters_' + str(i), [4,8,16,32,64]),
+        filters=hp.Choice('filters_' + str(i), [4,8,16,32]),
         # filters=hp.Int('filters_' + str(i), 4, 32, step=4, default=8),
         kernel_size=hp.Int('kernel_size_' + str(i), 3, 5),
         padding='same')(x)
@@ -143,10 +154,23 @@ def build_model(hp):
 
 if __name__ == '__main__':
   
-  dataset  = 'svhn'
-  epochs   = 60
-  nclasses = 10
-  batch_size = 32
+  parser = argparse.ArgumentParser("Run keras tuner: datasets are 'svhn' or 'jetimages'")
+  parser.add_argument('dataset', type=str, help='Path to dataset', default='svhn')
+  parser.add_argument('-b', '--batch', type=int, default=32,
+                      help='batchsize', dest='batch')
+  parser.add_argument('-c', '--classes', type=int, default=10,
+                      help='NUmber of out classes', dest='classes')
+  parser.add_argument('-e', '--epochs', type=int, default=20,
+                      help='Number of epochs', dest='epochs')
+  parser.add_argument('-r', '--reload', type=bool, default=False,
+                      help='Reload already tuned model', dest='reload')                    
+  args = parser.parse_args()
+      
+  
+  dataset    = args.dataset
+  epochs     = args.epochs
+  nclasses   = args.classes
+  batch_size = args.batch
   
   if len(sys.argv) > 1:
     dataset = str(sys.argv[1])   
@@ -188,6 +212,7 @@ if __name__ == '__main__':
   logging.info(f'Using N steps per epoch N = {steps_per_epoch}')
   
   # doTest()# For testing
+  
   tuner = kt.Hyperband(
         hypermodel=build_model,
         objective='val_accuracy',
@@ -196,51 +221,57 @@ if __name__ == '__main__':
         hyperband_iterations=3,
         distribution_strategy=strategy,
         directory='/afs/cern.ch/work/t/thaarres/public/kerasTune/%s/'%dataset,
-        project_name='v4_dropout',
+        project_name='v5_minimodel',
         overwrite=False)
   tuner.search_space_summary()
   logging.info('Start search')
-
-  if dataset == 'svhn':
-    logging.info('Tuning SVHN model ')
-    tuner.search(ds_train,
-               steps_per_epoch=steps_per_epoch,
-               validation_data=ds_test,
-               epochs=epochs,
-               callbacks=[tf.keras.callbacks.EarlyStopping('val_accuracy',patience=1)])#,ClearTrainingOutput()])
-  elif dataset == 'jetimages':
-    logging.info('Tuning jet images model')
-    tuner.search(ds_train,
-              steps_per_epoch=len(ds_train),
-              epochs=epochs,
-              validation_data=ds_test,
-              validation_steps=len(ds_test),
-              callbacks=[tf.keras.callbacks.EarlyStopping('loss',patience=1)])
+  
+  if args.reload:
+    model = restoreBestModel(dir='./multiclass_classifier/training', project='search_bs2000', obj='val_accuracy')
+    
   else:
-    logging.error("Invalid dataset!")
-  tuner.results_summary()
-  logging.info('Get the optimal hyperparameters')
-  best_hps = tuner.get_best_hyperparameters(num_trials = 1)[0]
+    if dataset == 'svhn':
+      logging.info('Tuning SVHN model ')
+      tuner.search(ds_train,
+                 steps_per_epoch=steps_per_epoch,
+                 validation_data=ds_test,
+                 epochs=epochs,
+                 callbacks=[tf.keras.callbacks.EarlyStopping('val_accuracy',patience=5)])#,ClearTrainingOutput()])
+    elif dataset == 'jetimages':
+      logging.info('Tuning jet images model')
+      tuner.search(ds_train,
+                steps_per_epoch=len(ds_train),
+                epochs=epochs,
+                validation_data=ds_test,
+                validation_steps=len(ds_test),
+                callbacks=[tf.keras.callbacks.EarlyStopping('loss',patience=5)])
+    else:
+      logging.error("Invalid dataset!")
+      
+    tuner.results_summary()
+    logging.info('Get the optimal hyperparameters')
+    best_hps = tuner.get_best_hyperparameters(num_trials = 1)[0]
 
-  logging.info(f'''
-  The hyperparameter search is complete. The optimal number of conv layers is {best_hps.get('conv_layers')} and the optimal learning rate for the optimizer
-  is {best_hps.get('learning_rate')}.
-  ''')
-
-  logging.info('Retrain using the best model!')
-  # Build the model with the optimal hyperparameters and train it on the data
-  model = tuner.hypermodel.build(best_hps)
-  model.summary()
+    logging.info(f'''
+    The hyperparameter search is complete. The optimal number of conv layers is {best_hps.get('conv_layers')} and the optimal number of dense layers is {best_hps.get('dense_layers')}.
+    ''')
+    logging.info('Getting and printing best hyperparameters!')
+    print (best_hps)
+    logging.info('Retrain using the best model!')
+    # Build the model with the optimal hyperparameters and train it on the data
+    model = tuner.hypermodel.build(best_hps)
+    model.summary()
+    
   if dataset.find('svhn')!=-1:
     model.fit(ds_train,
               steps_per_epoch=steps_per_epoch,
               validation_data=ds_test,
               epochs=100,
-              callbacks=[tf.keras.callbacks.EarlyStopping('val_accuracy',patience=1)])
+              callbacks=[tf.keras.callbacks.EarlyStopping('val_accuracy',patience=5)])
   else:
     model.fit(ds_train,
               steps_per_epoch=len(ds_train),
               epochs=100,
               validation_data=ds_test,
               validation_steps=len(ds_test),
-              callbacks=[tf.keras.callbacks.EarlyStopping('loss',patience=1)])
+              callbacks=[tf.keras.callbacks.EarlyStopping('loss',patience=5)])
