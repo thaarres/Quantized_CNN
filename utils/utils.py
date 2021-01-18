@@ -27,7 +27,7 @@ from tensorflow_model_optimization.python.core.sparsity.keras import prune
 from tensorflow_model_optimization.python.core.sparsity.keras import pruning_callbacks
 from tensorflow_model_optimization.python.core.sparsity.keras import pruning_schedule
 from tensorflow_model_optimization.python.core.sparsity.keras import pruning_wrapper
-
+import itertools
 
 print("Importing helper libraries")
 from tensorflow.keras.utils import to_categorical, plot_model
@@ -37,53 +37,51 @@ import matplotlib.pyplot as plt
 from scipy.io import loadmat
 from qkeras import quantized_bits
 from matplotlib.ticker import ScalarFormatter
-import seaborn as sns
-sns.set(style="whitegrid")
-            
+colz = ['#543005','#8c510a','#bf812d','#dfc27d','#f6e8c3','#f5f5f5','#c7eae5','#80cdc1','#35978f','#01665e','#003c30']*5
+colz = ['#003f5c','#444e86','#955196','#dd5182','#ff6e54','#ffa600']*5
 print("Importing private libraries")
-from callbacks import all_callbacks
+from utils.callbacks import all_callbacks
 import models
+import pickle
 
-def getFeaturesLabels(name="svhn_cropped"):
-  (img_train, label_train), (img_test, label_test) = tfds.as_numpy(tfds.load(name, split=['train', 'test'], batch_size=-1, as_supervised=True,))
-  return (img_train, label_train),(img_test, label_test)
+# import mplhep as hep
+# plt.style.use(hep.style.ATLAS)
+# import matplotlib as mpl
+# mpl.rcParams["yaxis.labellocation"] = 'center'
+# mpl.rcParams["xaxis.labellocation"] = 'center'
+# # mpl.rcParams["xtick.direction"] =  "in"
+# # mpl.rcParams["xtick.major.size"] =  12
+# # mpl.rcParams["xtick.major.pad"] =  6
+
+import mplhep as hep
+plt.style.use(hep.style.CMS)
+import matplotlib as mpl 
+mpl.rcParams["yaxis.labellocation"] = 'center'
+mpl.rcParams["xaxis.labellocation"] = 'center'
+mpl.rcParams["xtick.top"] =  True
+mpl.rcParams["xtick.major.top"] =  True
+mpl.rcParams["xtick.major.bottom"] =  True
+mpl.rcParams["xtick.minor.top"] =  False
+mpl.rcParams["xtick.minor.bottom"] =  False
+mpl.rcParams["xtick.minor.visible"] =  False
+
+ds_train_ = tfds.load(name='svhn_cropped', split="train", batch_size=-1, data_dir='/afs/cern.ch/user/t/thaarres/tensorflow_datasets/')
+dataset_ = tfds.as_numpy(ds_train_)
+x_train_, y_train_ = dataset_["image"].astype(np.float32), dataset_["label"]
+
+if len(x_train_.shape) == 3:
+  x_train_ = x_train_.reshape(x_train_.shape + (1,))
+
+x_train_ /= 255.0
+x_mean = np.mean(x_train_, axis = 0)#.astype(np.float32)
+x_std  = np.std(x_train_, axis = 0)#.astype(np.float32)
+
+def preprocess(image, label,nclasses=10):
+  image = tf.cast(image, tf.float32) / 255.
+  image =  (tf.cast(image, tf.float32)-x_mean)/x_std
+  label = tf.one_hot(tf.squeeze(label), nclasses)
+  return image, label
   
-def dataset2numpy(dataset, steps=1):
-    "Helper function to get data/labels back from TF dataset"
-    iterator = dataset.make_one_shot_iterator()
-    next_val = iterator.get_next()
-    with tf.Session() as sess:
-        for _ in range(steps):
-           inputs, labels = sess.run(next_val)
-           yield inputs, labels
-           
-def parse_config(config_file) :
-
-  print("Loading configuration from", config_file)
-  config = open(config_file, 'r')
-  return yaml.safe_load(config)
-  
-def toJSON(model, outfile_name):
-  outfile = open(outfile_name,'w')
-  jsonString = model.to_json()
-  with outfile:
-    obj = json.loads(jsonString)
-    json.dump(obj, outfile, sort_keys=True,indent=4, separators=(',', ': '))
-    outfile.write('\n')
-    
-def rgb2gray(images):
-    return np.expand_dims(np.dot(images, [0.2990, 0.5870, 0.1140]), axis=3)
-
-def formatSVHNArray(data):
-    im = []
-    for i in range(0, data.shape[3]):
-        im.append(rgb2gray(data[:, :, :, i]))
-    return np.asarray(im)
-
-def fixSVHNLabel(labels):
-    labels[labels == 10] = 0
-    return labels
-
 def plot_images(img, labels, nrows, ncols,outname='svhn_data.pdf'):
     fig, axes = plt.subplots(nrows, ncols)
     for i, ax in enumerate(axes.flat): 
@@ -95,79 +93,7 @@ def plot_images(img, labels, nrows, ncols,outname='svhn_data.pdf'):
         ax.set_title(labels[i])
     fig.savefig(outname)    
     
-def getDatasets(nclasses,doMnist=False,doSvhn=False,greyScale=False,ext=False):
-  
-  if doSvhn:
-    
-    mat_train = loadmat('train_32x32.mat', squeeze_me=True)     # 73257 +extra:531131
-    mat_test  = loadmat('test_32x32.mat', squeeze_me=True)     # 26032
-    
-    if ext:
-      mat_train_ext = loadmat('extra_32x32.mat', squeeze_me=True)
-      x_train = np.concatenate((mat_train['X'] , mat_train_ext['X']), axis=-1)
-      y_train = np.concatenate((mat_train['y'] , mat_train_ext['y']))
-    else:
-      x_train = mat_train['X']
-      y_train = mat_train['y']
-      
-    x_test  = mat_test['X']
-    y_test  = mat_test['y']
-  
-    x_train, x_test =  x_train.transpose((3,0,1,2)), x_test.transpose((3,0,1,2))
-    x_train = x_train.astype('float32')
-    x_test  = x_test.astype('float32')
-    x_train /= 255.0
-    x_test /= 255.0
-    
-    y_train[y_train == 10] = 0
-    y_test[y_test == 10] = 0
-    # y_train = to_categorical(y_train, nclasses)
-    # y_test  = to_categorical(y_test , nclasses)
-    
-    if greyScale:
-      x_train = rgb2gray(x_train).astype(np.float32)
-      x_test  = rgb2gray(x_test).astype(np.float32)
-      
-    #plot_images(X_train, y_train, 2, 8)
-
-  else:
-    
-    if doMnist:
-      (x_train, y_train), (x_test, y_test) = mnist.load_data()
-    else:    
-      (x_train, y_train), (x_test, y_test) = fashion_mnist.load_data()
-
-    x_test_orig = x_test
-
-    x_train = x_train.astype("float32")
-    x_test  = x_test.astype("float32")
-
-    x_train = x_train[..., np.newaxis]
-    x_test  = x_test[..., np.newaxis]
-
-    x_train /= 255.0
-    x_test /= 255.0
-
-    print(x_train.shape[0], "train samples")
-    print(x_test.shape[0], "test samples")
-
-    print(y_train[0:10])
-
-    # y_train = to_categorical(y_train, nclasses)
-    # y_test  = to_categorical(y_test, nclasses)
-  
-  return x_train,x_test,y_train,y_test
-
-def preprocess(image, label,nclasses=10):
-  image = tf.cast(image, tf.float32) / 255.
-  label = tf.one_hot(tf.squeeze(label), nclasses)
-  return image, label
-  
 def getKfoldDataset(name="svhn_cropped",extra=False,val_percent=10):    
-  # Construct a tf.data.Dataset
-  # dataset, info  = tfds.load(name=name, with_info=True, as_supervised=True)
-  # train_, test_, extra_ = dataset['train'], dataset['test'], dataset['extra']
-  # test_data = tfds.load(name, split=[f'test[:{k}%]+test[{k+20}%:]+test[:{k}%]+test[{k+20}%:]'for k in range(0, 100, 20)], as_supervised=True)
   test_data = tfds.load(name, split='test', as_supervised=True)
   if extra:
       val_data         = tfds.load(name, split=[f'train[{k}%:{k+10}%]+extra[{k}%:{k+10}%]'for k in range(0, 100, 10)], with_info=False, as_supervised=True,shuffle_files=True)
@@ -209,34 +135,64 @@ def trainingDiagnostics(historiesPerFold,outdir,filename='learning_curve.pdf'):
     axis.set_major_locator(plt.MaxNLocator(3))
   plt.savefig(outdir+"/"+filename)
 
-def performanceSummary(scores,labels, outdir,outname='/performance_summary.pdf',folds=10):
+def performanceSummary(scores,labels, outdir,outname='/performance_summary.pdf',folds=10,extra=''):
   plt.clf()
   fig, ax = plt.subplots()
+  plt.grid(False)
   # plt.legend(loc='upper left',fontsize=15)
   plt.grid(color='0.8', linestyle='dotted')
   # plt.figtext(0.925, 0.94,m.replace('_',' '), wrap=True, horizontalalignment='right')
-  add_logo(ax, fig, 0.14, position='upper right')
+  add_logo(ax, fig, 0.14, position='upper left')
   bins = np.linspace(-1.5, 1.5, 50)
-  colors = sns.color_palette("colorblind", len(scores))
   for i, model in enumerate(scores):
-    bp1 = ax.boxplot(model, positions=[i], bootstrap=1000, notch=False, widths=0.5, patch_artist=True, boxprops=dict(facecolor=colors[i]),medianprops=dict(color="black"),showfliers=True)
+    bp1 = ax.boxplot(model, positions=[i], bootstrap=1000, notch=False, widths=0.5, patch_artist=True, boxprops=dict(facecolor=colz[i]),medianprops=dict(color="black"),showfliers=False)
   
-  ax.set_ylim(0.1,1.0)
-  # plt.legend(loc='upper left',fontsize=15)
-	
-	# for i,(score,label) in enumerate(zip(scores,labels)):
-#     boxes.append = ( ax.boxplot(score, bootstrap=1000, notch=True, patch_artist=True, boxprops=dict(facecolor="rosybrown"),medianprops=dict(color="orangered"),showfliers=False,positions=[i],widths=0.5),label=)
-#   print(boxes[i])
-#   ax.legend([boxes['boxes'][0]], [labels], loc='upper right')
-  ax.text(0.1 , 0.98, 'k-Fold cross-validaton , k=%i'%folds, verticalalignment='top',horizontalalignment='left',transform=ax.transAxes,color='slategray', fontsize=8)
+  ax.set_ylim(bottom=0.55,top=1.1)
+  ax.text(0.73, 0.98, '{}-fold cross-validaton'.format(folds), verticalalignment='top',horizontalalignment='left',transform=ax.transAxes,color='slategray', fontsize=8)
 #
   plt.ylabel("Accuracy")
   labels_ = [item.get_text() for item in ax.get_xticklabels()]
   for i in range(0,len(labels)):
     labels_[i] = labels[i]
   ax.set_xticklabels(labels_)
+  if not extra == '':
+    plt.figtext(0.825, 0.18,extra, wrap=True, horizontalalignment='right',verticalalignment='center')
   plt.savefig(outdir+outname)
 
+def performanceSummary2(scores1,scores2, labels, outdir,outname='/performance_summary.pdf',folds=10,extra=''):
+
+  fig = plt.figure()
+  ax = fig.add_subplot()
+  # gs = fig.add_gridspec(ncols=2, nrows=1, width_ratios=[5,1])
+  # ax = fig.add_subplot(gs[0,0])
+  plt.ylabel("Accuracy")
+  
+  # plt.legend(loc='upper left',fontsize=15)
+  # plt.grid(color='0.8', linestyle='dotted')
+  # plt.figtext(0.925, 0.94,m.replace('_',' '), wrap=True, horizontalalignment='right')
+  add_logo(ax, fig, 0.3, position='upper left')
+  colz=['#FC766AFF','#184A45FF']
+  for i, (model1, model2) in enumerate(zip(scores1,scores2)):
+    bp1 = plt.boxplot(model1, positions=[i+1], bootstrap=1000, notch=False, widths=0.5, patch_artist=True, boxprops=dict(facecolor=colz[0],edgecolor=colz[0]),medianprops=dict(color="black"),showfliers=False)
+    bp2 = plt.boxplot(model2, positions=[i+1], bootstrap=1000, notch=False, widths=0.5, patch_artist=True, boxprops=dict(facecolor=colz[1],edgecolor=colz[1]),medianprops=dict(color="black"),showfliers=False)
+  
+  labels_ = [item.get_text() for item in ax.get_xticklabels()]
+  labels = list(itertools.chain.from_iterable(itertools.repeat(x, 2) for x in labels))
+  for i in range(0,len(labels)):
+    labels_[i] = labels[i]
+  labels_[-1] = "BF/\nBP"
+  labels_[-3] = "AQ/\nAQP"
+  ax.set_xticklabels(labels_)
+  ax.legend([bp1["boxes"][0], bp2["boxes"][0]], ['Full', 'Pruned (50%)'], loc='lower left',frameon=False, bbox_to_anchor=(0.45, 0.05))
+  ax.set_ylim(bottom=0.55,top=1.1)
+  plt.axvline(x=10.5, color='black')
+  ax.text(0.50, 0.95, '{}-fold cross-validaton'.format(folds), verticalalignment='top',horizontalalignment='left',transform=ax.transAxes,color='black', fontsize=18)
+  #
+  if not extra == '':
+    plt.figtext(0.825, 0.18,extra, wrap=True, horizontalalignment='right',verticalalignment='center')
+  plt.savefig(outdir+outname)
+  # pickle.dump(ax, file('performanceSummary2.pickle', 'w'))
+  
 def getCallbacks():
   callbacks=all_callbacks(stop_patience=1000,
   lr_factor=0.5,
@@ -251,7 +207,7 @@ def getCallbacks():
 def add_logo(ax, fig, zoom, position='upper left', offsetx=10, offsety=10, figunits=False):
 
   #resize image and save to new file
-  img = cv2.imread('logo.jpg', cv2.IMREAD_UNCHANGED)
+  img = cv2.imread('utils/logo.jpg', cv2.IMREAD_UNCHANGED)
   im_w = int(img.shape[1] * zoom )
   im_h = int(img.shape[0] * zoom )
   dim = (im_w, im_h)
@@ -310,13 +266,13 @@ def add_logo(ax, fig, zoom, position='upper left', offsetx=10, offsety=10, figun
   transformation = ax.transAxes
   if figunits: transformation=fig.transFigure
   
-  rectangle = FancyBboxPatch((b_xmin,b_ymin),
-                              b_w, b_h,
-                  transform=transformation,
-                  boxstyle='round,pad=0.004,rounding_size=0.01',
-                  facecolor='w',
-                  edgecolor='0.8',linewidth=0.8,clip_on=False)
-  ax.add_patch(rectangle)
+  # rectangle = FancyBboxPatch((b_xmin,b_ymin),
+  #                             b_w, b_h,
+  #                 transform=transformation,
+  #                 boxstyle='round,pad=0.004,rounding_size=0.01',
+  #                 facecolor='w',
+  #                 edgecolor='0.8',linewidth=0.8,clip_on=False)
+  # ax.add_patch(rectangle)
   
 def print_model_sparsity(pruned_model):
   """Prints sparsity for the pruned layers in the model.

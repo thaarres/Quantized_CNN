@@ -12,7 +12,7 @@ from optparse import OptionParser
 import h5py
 from tensorflow.keras.optimizers import Adam, Nadam
 import tensorflow as tf
-from callbacks import all_callbacks
+from utils.callbacks import all_callbacks
 import pandas as pd
 from tensorflow.keras.layers import Input
 from sklearn.model_selection import train_test_split

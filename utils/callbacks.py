@@ -106,9 +106,15 @@ class all_callbacks(object):
         self.history=History()
         self.timer = Losstimer()
         
+        # self.callbacks=[
+        #     self.nl_begin,
+        #     self.modelbestcheck,self.modelbestcheckweights, self.modelcheck,self.modelcheckweights,self.modelcheckperiod,
+        #     self.reduce_lr, self.stopping, self.nl_end, self.tb, self.history,
+        #     self.timer
+        # ]
         self.callbacks=[
             self.nl_begin, 
-            self.modelbestcheck,self.modelbestcheckweights, self.modelcheck,self.modelcheckweights,self.modelcheckperiod,
-            self.reduce_lr, self.stopping, self.nl_end, self.tb, self.history,
+            self.modelbestcheck,self.modelbestcheckweights,
+            self.reduce_lr, self.stopping, self.nl_end, self.history,
             self.timer
         ]

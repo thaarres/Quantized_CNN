@@ -19,7 +19,7 @@ from qkeras import *
 from qkeras.utils import model_quantize
 from qkeras.qtools import run_qtools
 from qkeras.qtools import settings as qtools_settings
-
+from tensorflow.keras.callbacks import Callback, EarlyStopping,History,ModelCheckpoint,TensorBoard,ReduceLROnPlateau,TerminateOnNaN,LearningRateScheduler
 
 import tensorflow_datasets as tfds
 import numpy as np
@@ -38,9 +38,13 @@ batchsize = 512
 
 doLROpt = False 
 train = True
-doChecks = False
+doChecks = True
+odir = 'AUTOQ_v5'
+if not os.path.exists(odir):
+    os.system('mkdir {}'.format(odir))
 
 custom_objects = {'PruneLowMagnitude': pruning_wrapper.PruneLowMagnitude,'QDense': QDense, 'QConv2D': QConv2D, 'Clip': Clip, 'QActivation': QActivation}
+
 def plot_convolutional_filters(img):
     
     img = np.expand_dims(img, axis=0)
@@ -94,7 +98,10 @@ def get_data(dataset_name, fast=False):
 
   dataset = tfds.as_numpy(ds_train)
   x_train, y_train = dataset["image"].astype(np.float32), dataset["label"]
-
+  plt.imshow(x_train[0])
+  plt.show()
+  from time import sleep; sleep(100)
+  plt.savefig('{}/x.pdf'.format(odir))
   dataset = tfds.as_numpy(ds_test)
   x_test, y_test = dataset["image"].astype(np.float32), dataset["label"]
   # print('Train', x_train.min(), x_train.max(), x_train.mean(), x_train.std())
@@ -149,7 +156,7 @@ def getEnergy(model):
 
 if __name__ == "__main__":
 
-  model = tf.keras.models.load_model("models/full.h5",custom_objects=custom_objects)
+  model = tf.keras.models.load_model("models/full_0/model_best.h5",custom_objects=custom_objects)
   model.summary()
   # config = blmodel.get_config()
   # model = tf.keras.Model.from_config(config)
@@ -171,8 +178,8 @@ if __name__ == "__main__":
 
   all_callbacks = [
       tf.keras.callbacks.EarlyStopping(patience=8),
-      tf.keras.callbacks.ModelCheckpoint(filepath='AUTOQ/KERAS_best.h5',monitor="val_loss",verbose=0,save_best_only=True), 
-      tf.keras.callbacks.ModelCheckpoint(filepath='AUTOQ/KERAS_best_weights.h5',monitor="val_loss",verbose=0,save_weights_only=True),
+      tf.keras.callbacks.ModelCheckpoint(filepath='{}/KERAS_best.h5'.format(odir),monitor="val_loss",verbose=0,save_best_only=True), 
+      tf.keras.callbacks.ModelCheckpoint(filepath='{}/KERAS_best_weights.h5'.format(odir),monitor="val_loss",verbose=0,save_weights_only=True),
       tf.keras.callbacks.ReduceLROnPlateau(monitor='val_loss', factor=0.5, patience=10, verbose=1, mode='auto', min_delta=0.0001, cooldown=2, min_lr=1E-6)   
   ]
 
@@ -187,9 +194,9 @@ if __name__ == "__main__":
     #                             epochs=50, validation_data=(X_val, y_val),
     #                            callbacks=all_callbacks)
   else:
-    model = tf.keras.models.load_model('AUTOQ/KERAS_best.h5',custom_objects={'PruneLowMagnitude': pruning_wrapper.PruneLowMagnitude,'QDense': QDense, 'QConv2D': QConv2D, 'Clip': Clip, 'QActivation': QActivation})
+    model = tf.keras.models.load_model('{}/KERAS_best.h5'.format(odir),custom_objects={'PruneLowMagnitude': pruning_wrapper.PruneLowMagnitude,'QDense': QDense, 'QConv2D': QConv2D, 'Clip': Clip, 'QActivation': QActivation})
                                
-  model.load_weights('AUTOQ/KERAS_best_weights.h5')                                                    
+  model.load_weights('{}/KERAS_best_weights.h5'.format(odir))                                                    
   if doLROpt:
     plt.semilogx(history.history['lr'], history.history['loss'])
     plt.axis([1e-4, 1e-1, 0, 1])
@@ -227,100 +234,110 @@ if __name__ == "__main__":
     plt.clf()
     plt.imshow(img)
     plt.show()
-    plt.savefig('AUTOQ/predict.pdf')
+    plt.savefig('{}/predict.pdf'.format(odir))
     plot_convolutional_filters(img)
     
-quantization_config = {
-        "kernel": {
-                "binary": 1,
-                "ternary": 2,
-                "quantized_bits(2,1,1,alpha=1.0)": 2,
-                "quantized_bits(4,0,1,alpha=1.0)": 4,
-                "quantized_bits(8,0,1,alpha=1.0)": 8,
-                "quantized_po2(4,1)": 4
-        },
-        "bias": {
-                "quantized_bits(4,0,1)": 4,
-        },
-        "activation": {
-                "binary": 1,
-                "ternary": 2,
-                "quantized_relu_po2(4,4)": 4,
-                "quantized_relu(3,1)": 3,
-                "quantized_relu(4,2)": 4,
-                "quantized_relu(8,2)": 8,
-                "quantized_relu(8,4)": 8,
-                "quantized_relu(16,8)": 16
-        },
-        "linear": {
-                "binary": 1,
-                "ternary": 2,
-                "quantized_bits(4,1)": 4,
-                "quantized_bits(8,2)": 8,
-                "quantized_bits(16,10)": 16
-        }
-}
-
-limit = {
-  "Dense": [8, 8, 8],
-  "Conv2D": [8, 8, 8],
-  "Activation": [8]
-  # "BatchNormalization": []
-}
-
-goal = {
-    "type": "energy",
-    "params": {
-        "delta_p": 5.0,
-        "delta_n": 5.0,
-        "rate": 2.0,
-        "stress": 1.0,
-        "process": "horowitz",
-        "parameters_on_memory": ["sram", "sram"],
-        "activations_on_memory": ["sram", "sram"],
-        "rd_wr_on_io": [False, False],
-        "min_sram_size": [0, 0],
-        "source_quantizers": ["fp16"],
-        "reference_internal": "fp16",
-        "reference_accumulator": "fp16"
-        }
-}    
-
-run_config = {
-  "output_dir": "AUTOQ?",
-  "goal": goal,
-  "quantization_config": quantization_config,
-  "learning_rate_optimizer": False,
-  "transfer_weights": False,
-  "mode": "bayesian",
-  "seed": 42,
-  "limit": limit,
-  "tune_filters": "layer",
-  "tune_filters_exceptions": "^dense",
-  "layer_indexes": range(1, len(model.layers) - 1),
-  "max_trials": 500,
-  "blocks": [
-      "^.*_0$",
-      "^.*_1$",
-      "^.*_2$",
-      "^.*_3$",
-      "^dense"
-    ],
-    "schedule_block": "cost"
-    
-}
-
-
-all_callbacks = [
-      tf.keras.callbacks.EarlyStopping(patience=8),
-      tf.keras.callbacks.ModelCheckpoint(filepath='AUTOQ/QKERAS_best.h5',monitor="val_loss",verbose=0,save_best_only=True), 
-      tf.keras.callbacks.ModelCheckpoint(filepath='AUTOQ/QKERAS_best_weights.h5',monitor="val_loss",verbose=0,save_weights_only=True),
-      tf.keras.callbacks.ReduceLROnPlateau(monitor='val_loss', factor=0.5, patience=10, verbose=1, mode='auto', min_delta=0.0001, cooldown=2, min_lr=1E-6)   
-    ]
-  
-print("quantizing layers:", [model.layers[i].name for i in run_config["layer_indexes"]])
-model.summary()
-autoqk = AutoQKerasScheduler(model, metrics=["acc"], custom_objects=custom_objects, debug=False, **run_config)
-autoqk.fit(X_train, y_train, validation_data=(x_test, y_test), batch_size=batchsize, epochs=100,callbacks=all_callbacks)
-qmodel = autoqk.get_best_model()
-qmodel.save_weights("AUTOQ/qmodel_0.h5")
+  # quantization_config = {
+  #       "kernel": {
+  #               "binary": 1,
+  #               "ternary": 2,
+  #               "quantized_bits(2,1,1,alpha=1.0)": 2,
+  #               "quantized_bits(4,0,1,alpha=1.0)": 4,
+  #               "quantized_bits(8,0,1,alpha=1.0)": 8,
+  #               # "quantized_po2(4,1)": 4
+  #       },
+  #       "bias": {
+  #               "binary": 1,
+  #               "ternary": 2,
+  #               "quantized_bits(4,0,1)": 4,
+  #       },
+  #       "activation": {
+  #               "binary": 1,
+  #               "ternary": 2,
+  #               # "quantized_relu_po2(4,4)": 4,
+  #               "quantized_relu(3,1)": 3,
+  #               "quantized_relu(4,2)": 4,
+  #               "quantized_relu(8,2)": 8,
+  #               "quantized_relu(8,4)": 8,
+  #               "quantized_relu(16,6)": 16
+  #       },
+  #       "linear": {
+  #               "binary": 1,
+  #               "ternary": 2,
+  #               "quantized_bits(4,1)": 4,
+  #               "quantized_bits(8,2)": 8,
+  #               "quantized_bits(16,6)": 16
+  #       }
+  # }
+  #
+  # limit = {
+  # "Dense": [8, 8, 8],
+  # "Conv2D": [8, 8, 8],
+  # "Activation": [8]
+  # # "BatchNormalization": []
+  # }
+  #
+  # goal = {
+  #   "type": "energy",
+  #   "params": {
+  #       "delta_p": 4.0,
+  #       "delta_n": 4.0,
+  #       "rate": 2.0,
+  #       "stress": 1.0,
+  #       "process": "horowitz",
+  #       "parameters_on_memory": ["sram", "sram"],
+  #       "activations_on_memory": ["sram", "sram"],
+  #       "rd_wr_on_io": [False, False],
+  #       "min_sram_size": [0, 0],
+  #       "source_quantizers": ["fp16"],
+  #       "reference_internal": "fp16",
+  #       "reference_accumulator": "fp16"
+  #       }
+  # }
+  #
+  # run_config = {
+  # "output_dir": "{}/".format(odir),
+  # "goal": goal,
+  # "quantization_config": quantization_config,
+  # "learning_rate_optimizer": False,
+  # "transfer_weights": False,
+  # "mode": "bayesian",
+  # "seed": 42,
+  # "limit": limit,
+  # "tune_filters": "layer",
+  # "tune_filters_exceptions": "output*",
+  # "layer_indexes": range(1, len(model.layers) - 1),
+  # "max_trials": 500,
+  # "blocks": [
+  #     "c.*_0$",
+  #     "c.*_1$",
+  #     "c.*_2$",
+  #     "d.*_0$",
+  #     "d.*_1$",
+  #     "output_dense",
+  #   ],
+  #   "schedule_block": "cost"
+  #
+  # }
+  #
+  #
+  # all_callbacks = [
+  #     tf.keras.callbacks.EarlyStopping(patience=6),
+  #     tf.keras.callbacks.ModelCheckpoint(filepath='{}/AUTOQKERAS_best.h5'.format(odir),monitor="val_loss",verbose=0,save_best_only=True),
+  #     tf.keras.callbacks.ModelCheckpoint(filepath='{}/AUTOQKERAS_best_weights.h5'.format(odir),monitor="val_loss",verbose=0,save_weights_only=True),
+  #     tf.keras.callbacks.ReduceLROnPlateau(monitor='val_loss', factor=0.5, patience=4, verbose=1, mode='auto', min_delta=0.0001, cooldown=2, min_lr=1E-6)
+  #   ]
+  #
+  # print("quantizing layers:", [model.layers[i].name for i in run_config["layer_indexes"]])
+  # model.summary()
+  # autoqk = AutoQKerasScheduler(model, metrics=["acc"], custom_objects=custom_objects, debug=False, **run_config)
+  # autoqk.fit(X_train, y_train, validation_data=(x_test, y_test), batch_size=batchsize, epochs=20,callbacks=all_callbacks)
+  # qmodel = autoqk.get_best_model()
+  # qmodel.save('{}/best_pretrain.h5'.format(odir))
+  # all_callbacks = [
+  #     tf.keras.callbacks.EarlyStopping(patience=8),
+  #     tf.keras.callbacks.ModelCheckpoint(filepath='{}/FINAL.h5'.format(odir),monitor="val_loss",verbose=0,save_best_only=True),
+  #     tf.keras.callbacks.ModelCheckpoint(filepath='{}/FINAL_weights.h5'.format(odir),monitor="val_loss",verbose=0,save_weights_only=True),
+  #     tf.keras.callbacks.ReduceLROnPlateau(monitor='val_loss', factor=0.5, patience=5, verbose=1, mode='auto', min_delta=0.0001, cooldown=2, min_lr=1E-6)
+  # ]
+  # history = qmodel.fit(X_train, y_train, epochs=100, batch_size=batchsize, steps_per_epoch=spe, validation_data=(X_val, y_val),callbacks=all_callbacks)

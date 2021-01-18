@@ -106,7 +106,7 @@ def checkLayerSize(m):
 
 def pruneFunction(layer):
   # pruning_params = {'pruning_schedule': sparsity.ConstantSparsity(0.75, begin_step=2000, frequency=100)}
-    pruning_params = {'pruning_schedule': sparsity.PolynomialDecay(initial_sparsity=0.40,final_sparsity=0.75, begin_step=1000, end_step=8000, frequency=100)}
+    pruning_params = {'pruning_schedule': sparsity.PolynomialDecay(initial_sparsity=0.40,final_sparsity=0.50, begin_step=1000, end_step=8000, frequency=100)}
     if isinstance(layer, tf.keras.layers.Conv2D):
       return tfmot.sparsity.keras.prune_low_magnitude(layer, **pruning_params)
     if isinstance(layer, tf.keras.layers.Dense) and layer.name!='output':
@@ -116,7 +116,7 @@ def pruneFunction(layer):
 def pruneModel(model):
   
   m_pruned = tf.keras.models.clone_model( model, clone_function=pruneFunction)
-  m_pruned._name = 'pruned75_'+model.name
+  m_pruned._name = 'pruned_'+model.name
   return m_pruned
     
 def build_config(i):

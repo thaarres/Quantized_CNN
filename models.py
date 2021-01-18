@@ -15,32 +15,33 @@ from tensorflow_model_optimization.python.core.sparsity.keras import pruning_sch
 
 from tensorflow_model_optimization.sparsity import keras as sparsity
   
-def float_cnn(name_, Inputs,nclasses,filters,kernel,strides, pooling, dropout, activation, pruning_params = {}):
+def float_cnn(name_, Inputs,nclasses,filters,kernel,strides, pooling, neurons, dropout, activation, pruning_params = {}):
+  print ("Building model: float_cnn")
   length = len(filters)
   if any(len(lst) != length for lst in [filters, kernel, strides,pooling,dropout]):
     sys.exit("One value for stride and kernel must be added for each filter! Exiting") 
   x = x_in = Inputs
   x = BatchNormalization()(x)
-  x = ZeroPadding2D( padding=(1, 1), data_format="channels_last") (x)
+  # x = ZeroPadding2D( padding=(1, 1), data_format="channels_last") (x)
   for i,(f,k,s,p,d) in enumerate(zip(filters,kernel,strides,pooling,dropout)):
-    print (("Adding layer with {} filters, kernel_size=({},{}), strides=({},{})").format(f,k,k,s,s))
-    x = DepthwiseConv2D(int(f),
+    print (("Adding CONV block with {} filters, kernel_size=({},{}), strides=({},{})").format(f,k,k,s,s))
+    x = Conv2D(int(f), kernel_size=(int(k), int(k)), strides=(int(s),int(s)), kernel_initializer='lecun_uniform', use_bias=False,
                name='conv_%i'%i)(x) 
-    if float(p) != 0:
-      if float(p)==1:
-        x = AveragePooling2D()(x)        
-      if float(p)==2:
-          x = MaxPooling2D()(x)
-          
+    if float(p) == 1:
+      x = AveragePooling2D(pool_size = (int(p),int(p)) )(x)
+    if float(p) == 2:
+      x = MaxPooling2D(pool_size = (int(p),int(p)) )(x)
     x = BatchNormalization()(x)
     x = Activation(activation,name='conv_act_%i'%i)(x)
-  # x = Flatten()(x) #x = tf.keras.layers.GlobalMaxPooling2D()(x)
-#   x = Dense(128,kernel_initializer='lecun_uniform', kernel_regularizer=l1(0.0001),name='dense_1', use_bias=False)(x)
-#   x = Dropout(0.25) (x)
-#   x = BatchNormalization()(x)
-#   x = Activation(activation,name='dense_act')(x)
-  x =  GlobalMaxPooling2D()(x)
-  x_out = Dense(nclasses, activation='softmax',name='output')(x)
+  x = Flatten()(x)
+  for i,n in enumerate(neurons):
+    print (("Adding DENSE block with {} neurons").format(n))
+    x = Dense(n,kernel_initializer='lecun_uniform',name='dense_%i'%i, use_bias=False)(x)
+    x = BatchNormalization()(x)
+    x = Activation(activation,name='dense_act_%i'%i)(x)
+  x = Dense(nclasses,name='output_dense')(x)
+  # x = BatchNormalization()(x)
+  x_out = Activation('softmax',name='output_softmax')(x)
   model = Model(inputs=[x_in], outputs=[x_out], name=name_)
   return model
 

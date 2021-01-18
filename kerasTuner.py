@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 import os, sys
 import logging
 import math
@@ -6,12 +7,15 @@ import kerastuner as kt
 import tensorflow as tf
 import argparse
 
+# import setGPU
+
 logging.info('Tensorflow version ' + tf.__version__)
 import tensorflow_datasets as tfds
 AUTO = tf.data.experimental.AUTOTUNE
     
 from utils.generator import DataGenerator
 from utils.ktuner import SearchResults
+from utils.callbacks import all_callbacks
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 # tf.get_logger().setLevel('ERROR')
     
@@ -112,24 +116,29 @@ def getData(dataset):
   
   return ds_train, ds_test, train_size
 
-
-
 def build_model(hp):
   '''Define the model to test'''
   inputs = tf.keras.Input(shape=[*image_size])
   x = inputs
-  for i in range(hp.Int('conv_layers', 1, 4, default=3)):
-    x = tf.keras.layers.Conv2D( #tf.keras.layers.SeparableConv2D(
-        filters=hp.Choice('filters_' + str(i), [4,8,16,32]),
-        # filters=hp.Int('filters_' + str(i), 4, 32, step=4, default=8),
-        kernel_size=hp.Int('kernel_size_' + str(i), 3, 5),
-        padding='same')(x)
+  x = tf.keras.layers.BatchNormalization()(x)
+  # x = ZeroPadding2D( padding=(1, 1), data_format="channels_last") (x)
+  for i in range(hp.Int('conv_layers', 1, 5, default=3)):
+    if useSeparable:
+      x = tf.keras.layers.SeparableConv2D(filters=hp.Choice('filters_' + str(i), [4,8,16,32,64]),
+                                          kernel_size=hp.Int('kernel_size_' + str(i), 3, 5),
+                                          padding='same')(x)
+    else:
+      x = tf.keras.layers.Conv2D( #tf.keras.layers.SeparableConv2D(
+          filters=hp.Choice('filters_' + str(i), [4,8,16,32,64]),
+          # filters=hp.Int('filters_' + str(i), 4, 32, step=4, default=8),
+          kernel_size=hp.Int('kernel_size_' + str(i), 3, 5),
+          padding='same')(x)
 
     if hp.Choice('pooling' + str(i), ['max', 'avg']) == 'max':
-        x = tf.keras.layers.MaxPooling2D()(x)
+      x = tf.keras.layers.MaxPooling2D()(x)
     else:
-        x = tf.keras.layers.AveragePooling2D()(x)
-
+      x = tf.keras.layers.AveragePooling2D()(x)
+      
     x = tf.keras.layers.BatchNormalization()(x)
     x = tf.keras.layers.ReLU()(x)
 
@@ -140,10 +149,11 @@ def build_model(hp):
   else:
     x = tf.keras.layers.Flatten()(x)
         
-  for i in range(hp.Int('dense_layers', 0, 2, default=1)):
-    x = tf.keras.layers.Dense(units=hp.Int('neurons_' + str(i), 16, 128, step=16, default=32))(x)
+  for i in range(hp.Int('dense_layers', 0, 3, default=1)):
+    x = tf.keras.layers.Dense(units=hp.Int('neurons_' + str(i), 16, 256, step=16, default=32))(x)
+    x = tf.keras.layers.BatchNormalization()(x)
     x = tf.keras.layers.ReLU()(x)
-    x = tf.keras.layers.Dropout( rate=hp.Choice('droupout_rate', [0.,0.2, 0.5, 0.6,0.8]))(x)
+    x = tf.keras.layers.Dropout( rate=hp.Choice('droupout_rate', [0.,0.2, 0.5,0.8]))(x)
 
   outputs = tf.keras.layers.Dense(nclasses, activation='softmax')(x)
   model = tf.keras.Model(inputs, outputs)
@@ -154,28 +164,31 @@ def build_model(hp):
 
 if __name__ == '__main__':
   
-  parser = argparse.ArgumentParser("Run keras tuner: datasets are 'svhn' or 'jetimages'")
+  parser = argparse.ArgumentParser("Run keras tuner: datasets are 'svhn' or 'jetimages'. Second argument is outdir")
   parser.add_argument('dataset', type=str, help='Path to dataset', default='svhn')
+  parser.add_argument('projectname', type=str, help='projectname', default='sepconv_v1')
   parser.add_argument('-b', '--batch', type=int, default=32,
                       help='batchsize', dest='batch')
   parser.add_argument('-c', '--classes', type=int, default=10,
                       help='NUmber of out classes', dest='classes')
   parser.add_argument('-e', '--epochs', type=int, default=20,
                       help='Number of epochs', dest='epochs')
-  parser.add_argument('-r', '--reload', type=bool, default=False,
-                      help='Reload already tuned model', dest='reload')                    
+  parser.add_argument('-r', '--reload', default=False, action='store_true',
+                      help='Reload already tuned model', dest='reload')   
+  parser.add_argument('-H', '--hyperband', default=False, action='store_true', 
+                      help='Run hyperband optimisation instead', dest='hyperband')     
+  parser.add_argument('-S', '--Separable', default=False, action='store_true',
+                      help='Run separable conv', dest='separable')                                                    
   args = parser.parse_args()
       
   
-  dataset    = args.dataset
-  epochs     = args.epochs
-  nclasses   = args.classes
-  batch_size = args.batch
-  
-  if len(sys.argv) > 1:
-    dataset = str(sys.argv[1])   
-  if len(sys.argv) > 2:
-    epochs = int(sys.argv[2])    
+  dataset      = args.dataset
+  pname        = args.projectname
+  epochs       = args.epochs
+  nclasses     = args.classes
+  batch_size   = args.batch
+  useHyperband = args.hyperband  
+  useSeparable = args.separable  
   
   if dataset.find('jetimages')!=-1:
     nclasses = 5
@@ -211,32 +224,73 @@ if __name__ == '__main__':
   steps_per_epoch=train_size//batch_size
   logging.info(f'Using N steps per epoch N = {steps_per_epoch}')
   
-  # doTest()# For testing
-  
-  tuner = kt.Hyperband(
-        hypermodel=build_model,
-        objective='val_accuracy',
-        max_epochs=100,
-        factor=3,
-        hyperband_iterations=3,
-        distribution_strategy=strategy,
-        directory='/afs/cern.ch/work/t/thaarres/public/kerasTune/%s/'%dataset,
-        project_name='v5_minimodel',
-        overwrite=False)
+  if useHyperband:
+    outfolder = '/afs/cern.ch/work/t/thaarres/public/kerasTune/HyperBand/%s/'%dataset
+    tuner = kt.Hyperband(
+          hypermodel=build_model,
+          objective='val_accuracy',
+          max_epochs=100,
+          factor=3,
+          hyperband_iterations=3,
+          distribution_strategy=strategy,
+          directory=outfolder,
+          project_name=pname,
+          overwrite=False)
+  else:
+    outfolder = '/afs/cern.ch/work/t/thaarres/public/kerasTune/BayOpt/%s/'%dataset
+    tuner = kt.BayesianOptimization(
+          hypermodel = build_model,
+          objective = 'val_accuracy',
+          max_trials = 2000,
+          distribution_strategy = strategy,
+          directory = outfolder,
+          # project_name='largeModelSeperableConv',
+          project_name = pname,
+          overwrite = False)
+
+  if not os.path.exists(outfolder):
+    os.system('mkdir '+outfolder)
+                          
   tuner.search_space_summary()
   logging.info('Start search')
   
   if args.reload:
-    model = restoreBestModel(dir='./multiclass_classifier/training', project='search_bs2000', obj='val_accuracy')
+    print("Will not train, simply reload models!")
     
+    tuner.reload()
+    # tuner.get_best_models(num_models=2)
+    # tuner.summary()
+    best_model = tuner.get_best_models(num_models=1)[0]
+    best_model.summary()
+    print(pname+'_bestModel.h5')
+    best_model.save(pname+'_bestModel.h5')
+    
+    # #BUGGY!!
+#     if useHyperband:
+#       model = restoreBestModel(dir='/afs/cern.ch/work/t/thaarres/public/kerasTune/HyperBand/%s/'%dataset, project=pname, obj='val_accuracy')
+#     else:
+#       model = restoreBestModel(dir='/afs/cern.ch/work/t/thaarres/public/kerasTune/BayOpt/%s/'%dataset, project=pname, obj='val_accuracy')
+#
   else:
+    callbacks = all_callbacks(stop_patience = 7,
+                              lr_factor = 0.5,
+                              lr_patience = 4,
+                              lr_epsilon = 0.000001,
+                              lr_cooldown = 2,
+                              lr_minimum = 0.0000001,
+                              outputDir = ".",
+                              debug = 0)
+                              
     if dataset == 'svhn':
       logging.info('Tuning SVHN model ')
       tuner.search(ds_train,
                  steps_per_epoch=steps_per_epoch,
                  validation_data=ds_test,
                  epochs=epochs,
-                 callbacks=[tf.keras.callbacks.EarlyStopping('val_accuracy',patience=5)])#,ClearTrainingOutput()])
+                 callbacks=[tf.keras.callbacks.EarlyStopping('val_accuracy',patience=5)],
+                 use_multiprocessing=True,
+                 workers=4)#,ClearTrainingOutput()])
+                 
     elif dataset == 'jetimages':
       logging.info('Tuning jet images model')
       tuner.search(ds_train,
@@ -244,7 +298,9 @@ if __name__ == '__main__':
                 epochs=epochs,
                 validation_data=ds_test,
                 validation_steps=len(ds_test),
-                callbacks=[tf.keras.callbacks.EarlyStopping('loss',patience=5)])
+                callbacks=[tf.keras.callbacks.EarlyStopping('loss',patience=5)],
+                use_multiprocessing=True,
+                workers=4)#,ClearTrainingOutput()])
     else:
       logging.error("Invalid dataset!")
       
@@ -261,17 +317,22 @@ if __name__ == '__main__':
     # Build the model with the optimal hyperparameters and train it on the data
     model = tuner.hypermodel.build(best_hps)
     model.summary()
+    best_model = tuner.get_best_models(num_models=1)[0]
+    best_model.summary()
     
-  if dataset.find('svhn')!=-1:
-    model.fit(ds_train,
-              steps_per_epoch=steps_per_epoch,
-              validation_data=ds_test,
-              epochs=100,
-              callbacks=[tf.keras.callbacks.EarlyStopping('val_accuracy',patience=5)])
-  else:
-    model.fit(ds_train,
-              steps_per_epoch=len(ds_train),
-              epochs=100,
-              validation_data=ds_test,
-              validation_steps=len(ds_test),
-              callbacks=[tf.keras.callbacks.EarlyStopping('loss',patience=5)])
+    
+  # if dataset.find('svhn')!=-1:
+  #   model.fit(ds_train,
+  #             steps_per_epoch=steps_per_epoch,
+  #             validation_data=ds_test,
+  #             epochs=100,
+  #             callbacks=[tf.keras.callbacks.EarlyStopping('val_accuracy',patience=5)])
+  # else:
+  #   model.fit(ds_train,
+  #             steps_per_epoch=len(ds_train),
+  #             epochs=100,
+  #             validation_data=ds_test,
+  #             validation_steps=len(ds_test),
+  #             callbacks=[tf.keras.callbacks.EarlyStopping('loss',patience=5)])
+  #
+  # model.save(pname+'.h5', save_format='tf')           
